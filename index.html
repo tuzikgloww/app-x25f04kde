@@ -37,18 +37,16 @@ body{
   background:#E5E5EA;
   font-family:'Rubik',sans-serif;
   color:var(--ink);
-  height:100vh;
-  height:100dvh;
-  display:flex;
-  justify-content:center;
 }
 #app{
+  position:fixed;
+  top:0;
+  bottom:0;
+  left:50%;
+  transform:translateX(-50%);
   width:100%;
   max-width:480px;
   background:var(--paper);
-  height:100vh;
-  height:100dvh;
-  position:relative;
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -61,7 +59,7 @@ header{
   backdrop-filter:blur(24px) saturate(180%);
   -webkit-backdrop-filter:blur(24px) saturate(180%);
   color:var(--ink);
-  padding:16px 20px 12px;
+  padding:calc(16px + env(safe-area-inset-top)) 20px 12px;
   position:relative;
   z-index:10;
   border-bottom:1px solid rgba(60,60,67,0.08);
@@ -99,7 +97,7 @@ header .sub{
   transition:opacity 0.2s ease, max-height 0.2s ease, margin 0.2s ease;
 }
 header.is-scrolled{
-  padding:10px 20px 10px;
+  padding:calc(10px + env(safe-area-inset-top)) 20px 10px;
 }
 header.is-scrolled .eyebrow{
   opacity:0; max-height:0; margin:0;
@@ -445,6 +443,18 @@ main{
   font-size:12.5px; color:rgba(255,255,255,0.7);
   margin-top:4px; text-transform:capitalize;
 }
+.account-pills{
+  display:flex; flex-wrap:wrap; gap:6px; margin-top:12px;
+}
+.account-pill{
+  background:rgba(255,255,255,0.25);
+  color:#fff;
+  font-family:'Rubik',sans-serif;
+  font-size:11px;
+  font-weight:700;
+  padding:5px 11px;
+  border-radius:999px;
+}
 
 /* LEDGER LIST (ruled lines) */
 .ledger{
@@ -775,6 +785,7 @@ nav button.active .ic{ transform:translateY(-1px); }
         <div class="today-label">Disponible hoy</div>
         <div class="today-amount" id="today-amount">$0</div>
         <div class="today-date" id="today-date">—</div>
+        <div class="account-pills" id="accounts-breakdown"></div>
       </div>
 
       <div class="summary-grid">
@@ -899,6 +910,12 @@ nav button.active .ic{ transform:translateY(-1px); }
           <label>Fecha</label>
           <input type="date" id="expense-date">
         </div>
+        <div class="field">
+          <label>¿De qué cuenta salió el dinero? (opcional)</label>
+          <select id="expense-account">
+            <option value="">Ninguna / no aplica</option>
+          </select>
+        </div>
 
         <div class="check-row">
           <input type="checkbox" id="expense-installment" onchange="toggleInstallmentFields()">
@@ -968,26 +985,34 @@ nav button.active .ic{ transform:translateY(-1px); }
     <!-- AHORRO -->
     <section class="view" id="view-ahorro">
       <div class="card">
-        <h2>Nueva caja de ahorro</h2>
+        <h2>Nueva cuenta</h2>
         <div class="field">
-          <label>Nombre de la caja</label>
-          <input type="text" id="box-name" placeholder="Ej. Ahorros">
+          <label>Nombre de la cuenta</label>
+          <input type="text" id="box-name" placeholder="Ej. Efectivo, BBVA débito, Ahorros">
+        </div>
+        <div class="field">
+          <label>Tipo de cuenta</label>
+          <div class="toggle-group" id="account-category-toggle">
+            <button type="button" data-category="efectivo">💵 Efectivo</button>
+            <button type="button" data-category="debito">💳 Débito</button>
+            <button type="button" class="active" data-category="ahorro">🏦 Ahorro</button>
+          </div>
         </div>
         <div class="row2">
           <div class="field">
-            <label>Monto inicial</label>
+            <label>Saldo inicial</label>
             <input type="number" id="box-initial" placeholder="0.00" inputmode="decimal">
           </div>
-          <div class="field">
+          <div class="field" id="box-rate-field">
             <label>% anual</label>
             <input type="number" id="box-rate" placeholder="15" inputmode="decimal">
           </div>
         </div>
-        <button class="btn btn-goal" onclick="addSavingsBox()">Crear caja de ahorro</button>
-        <p class="fab-note">El interés se calcula y se abona automáticamente cada día, como en Revolut.</p>
+        <button class="btn btn-goal" onclick="addSavingsBox()">Crear cuenta</button>
+        <p class="fab-note">Solo las cuentas de ahorro generan interés, calculado y abonado automáticamente cada día.</p>
       </div>
 
-      <p class="section-title">Tus cajas de ahorro</p>
+      <p class="section-title">Tus cuentas</p>
       <div id="boxes-list"></div>
     </section>
 
@@ -1117,7 +1142,7 @@ nav button.active .ic{ transform:translateY(-1px); }
     <button data-view="ingresos"><span class="ic">💵</span>Ingresos</button>
     <button data-view="gastos"><span class="ic">🧾</span>Gastos</button>
     <button data-view="metas"><span class="ic">🎯</span>Metas</button>
-    <button data-view="ahorro"><span class="ic">🏦</span>Ahorro</button>
+    <button data-view="ahorro"><span class="ic">🏦</span>Cuentas</button>
     <button data-view="calendario"><span class="ic">📅</span>Calendario</button>
     <button data-view="deudas"><span class="ic">💳</span>Deudas</button>
   </nav>
@@ -1134,6 +1159,15 @@ nav button.active .ic{ transform:translateY(-1px); }
         <button class="modal-btn cancel" id="modal-cancel">Cancelar</button>
         <button class="modal-btn confirm" id="modal-confirm">Confirmar</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="account-overlay">
+    <div class="modal-box" style="max-height:78vh; display:flex; flex-direction:column;">
+      <div class="modal-title" id="account-overlay-title">Historial</div>
+      <div class="modal-message" id="account-overlay-sub">Saldo actual: $0</div>
+      <div id="account-history-list" style="overflow-y:auto; display:flex; flex-direction:column; gap:8px; margin:6px 0 16px;"></div>
+      <button class="modal-btn confirm" style="width:100%;" onclick="closeAccountOverlay()">Cerrar</button>
     </div>
   </div>
 </div>
@@ -1310,7 +1344,7 @@ const headerData = {
   ingresos: {eyebrow:'Registro de Cuentas Personal', title:'Ingresos', sub:'Nómina y negocio'},
   gastos: {eyebrow:'Registro de Cuentas Personal', title:'Gastos', sub:'Qué está saliendo'},
   metas: {eyebrow:'Registro de Cuentas Personal', title:'Metas', sub:'Deudas por pagar'},
-  ahorro: {eyebrow:'Registro de Cuentas Personal', title:'Ahorro', sub:'Tus cajas de ahorro'},
+  ahorro: {eyebrow:'Registro de Cuentas Personal', title:'Cuentas', sub:'Dónde guardas tu dinero'},
   calendario: {eyebrow:'Registro de Cuentas Personal', title:'Calendario', sub:'Revisa cualquier día o mes'},
   deudas: {eyebrow:'Registro de Cuentas Personal', title:'Deudas', sub:'Tus tarjetas y créditos'}
 };
@@ -1371,6 +1405,7 @@ function addExpense(){
   const subcat = cat==='Compras online' ? document.getElementById('expense-subcat').value : null;
   const amount = parseFloat(document.getElementById('expense-amount').value);
   const date = document.getElementById('expense-date').value || todayISO();
+  const accountId = document.getElementById('expense-account').value || null;
   const isInstallment = document.getElementById('expense-installment').checked;
   const isFixed = document.getElementById('expense-fixed').checked && !isInstallment;
 
@@ -1387,25 +1422,29 @@ function addExpense(){
     debts.unshift({
       id: planId, name: desc || cat, bank: null, limit: totalToPay, balance: totalToPay - firstPay,
       model: type==='msi' ? 'msi' : 'interest_plan', isPlan: true, monthsTotal: months, monthsPaid: 1,
-      monthlyAmount, rate: interestPct, cat, subcat, lastPlanMonth: date.slice(0,7)
+      monthlyAmount, rate: interestPct, cat, subcat, lastPlanMonth: date.slice(0,7), accountId
     });
     expenses.unshift({ id:Date.now()+1, desc:(desc||cat)+' ('+'1/'+months+')', cat, subcat, amount:firstPay, date, planId });
     save(STORAGE_KEYS.debts, debts);
     save(STORAGE_KEYS.expense, expenses);
+    chargeAccount(accountId, firstPay, desc||cat);
     showToast('Plan a meses creado — se agregó '+fmt(firstPay)+' a tus gastos de este mes');
   } else if(isFixed){
-    fixedExpenses.unshift({ id:Date.now(), desc: desc || cat, cat, subcat, amount, dayOfMonth: parseInt(date.split('-')[2]), lastPostedMonth: date.slice(0,7), active:true });
+    fixedExpenses.unshift({ id:Date.now(), desc: desc || cat, cat, subcat, amount, dayOfMonth: parseInt(date.split('-')[2]), lastPostedMonth: date.slice(0,7), active:true, accountId });
     expenses.unshift({ id:Date.now()+1, desc: desc || cat, cat, subcat, amount, date });
     save(STORAGE_KEYS.fixed, fixedExpenses);
     save(STORAGE_KEYS.expense, expenses);
+    chargeAccount(accountId, amount, desc||cat);
     showToast('Gasto fijo agregado — se repetirá cada mes automáticamente');
   } else {
     expenses.unshift({ id:Date.now(), desc: desc || (subcat || cat), cat, subcat, amount, date });
     save(STORAGE_KEYS.expense, expenses);
+    chargeAccount(accountId, amount, desc||cat);
   }
 
   document.getElementById('expense-desc').value='';
   document.getElementById('expense-amount').value='';
+  document.getElementById('expense-account').value='';
   document.getElementById('expense-installment').checked=false;
   document.getElementById('expense-fixed').checked=false;
   document.getElementById('installment-fields').style.display='none';
@@ -1629,6 +1668,7 @@ function accruePlanPayments(){
         expenses.unshift({ id:Date.now()+Math.random(), desc:d.name+' ('+(d.monthsPaid+1)+'/'+d.monthsTotal+')', cat:d.cat||'Otro', subcat:d.subcat||null, amount:pay, date:todayISO(), planId:d.id });
         d.balance = Math.max(0, d.balance - pay);
         changedExpenses = true;
+        chargeAccount(d.accountId, pay, d.name);
       }
       d.monthsPaid++;
       monthsElapsed--;
@@ -1659,6 +1699,7 @@ function accrueFixedExpenses(){
       if(dateISO > todayISO()) dateISO = todayISO();
       expenses.unshift({ id:Date.now()+Math.random(), desc:f.desc+' (fijo)', cat:f.cat, subcat:f.subcat||null, amount:f.amount, date:dateISO, fixedId:f.id });
       changed = true;
+      chargeAccount(f.accountId, f.amount, f.desc);
     }
     if(monthsElapsed > 0) f.lastPostedMonth = curMonthKey;
   });
@@ -1973,43 +2014,64 @@ function accrueInterest(){
   const todayStr = todayISO();
   let changed = false;
   boxes.forEach(b=>{
+    if(!b.category) b.category = 'ahorro';
+    if(!b.history){ b.history = [{ date:b.lastAccrual||todayStr, type:'inicial', amount:b.balance, balanceAfter:b.balance }]; changed = true; }
     if(!b.lastAccrual){ b.lastAccrual = todayStr; changed = true; return; }
-    const last = new Date(b.lastAccrual+'T00:00:00');
+    const cursor = new Date(b.lastAccrual+'T00:00:00');
     const today = new Date(todayStr+'T00:00:00');
-    const days = Math.round((today-last)/86400000);
-    if(days>0){
-      if(b.rate>0 && b.balance>0){
-        const dailyRate = Math.pow(1 + b.rate/100, 1/365) - 1;
-        b.balance = b.balance * Math.pow(1+dailyRate, days);
+    const dailyRate = (b.category==='ahorro' && b.rate>0) ? Math.pow(1 + b.rate/100, 1/365) - 1 : 0;
+    while(cursor < today){
+      cursor.setDate(cursor.getDate()+1);
+      if(dailyRate>0 && b.balance>0){
+        const gain = b.balance * dailyRate;
+        b.balance += gain;
+        const dISO = cursor.getFullYear()+'-'+pad2(cursor.getMonth()+1)+'-'+pad2(cursor.getDate());
+        b.history.push({ date:dISO, type:'interes', amount:gain, balanceAfter:b.balance });
       }
-      b.lastAccrual = todayStr;
       changed = true;
     }
+    b.lastAccrual = todayStr;
   });
   if(changed) save(STORAGE_KEYS.boxes, boxes);
 }
 
+let currentAccountCategory = 'ahorro';
+document.querySelectorAll('#account-category-toggle button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('#account-category-toggle button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentAccountCategory = btn.dataset.category;
+    document.getElementById('box-rate-field').style.display = (currentAccountCategory==='ahorro') ? 'block' : 'none';
+  });
+});
+
 function addSavingsBox(){
   const name = document.getElementById('box-name').value.trim();
   const initial = parseFloat(document.getElementById('box-initial').value) || 0;
-  const rate = parseFloat(document.getElementById('box-rate').value) || 0;
-  if(!name){ alert('Ponle un nombre a tu caja de ahorro.'); return; }
-  boxes.unshift({ id:Date.now(), name, balance:initial, rate, lastAccrual:todayISO() });
+  const rate = currentAccountCategory==='ahorro' ? (parseFloat(document.getElementById('box-rate').value) || 0) : 0;
+  if(!name){ alert('Ponle un nombre a tu cuenta.'); return; }
+  const todayStr = todayISO();
+  boxes.unshift({
+    id:Date.now(), name, balance:initial, rate, category:currentAccountCategory, lastAccrual:todayStr,
+    history:[{ date:todayStr, type:'inicial', amount:initial, balanceAfter:initial }]
+  });
   save(STORAGE_KEYS.boxes, boxes);
   document.getElementById('box-name').value='';
   document.getElementById('box-initial').value='';
   document.getElementById('box-rate').value='';
   renderAll();
-  showToast('Caja "'+name+'" creada');
+  showToast('Cuenta "'+name+'" creada');
 }
 
 async function depositBox(id){
   const b = boxes.find(b=>b.id===id);
-  const amount = await openModal({ title:'Depositar en "'+b.name+'"', message:'¿Cuánto quieres agregar a esta caja?', confirmText:'Depositar' });
+  const amount = await openModal({ title:'Depositar en "'+b.name+'"', message:'¿Cuánto quieres agregar a esta cuenta?', confirmText:'Depositar' });
   if(amount===null) return;
   const val = parseFloat(amount);
   if(!val || val<=0) return;
   b.balance += val;
+  if(!b.history) b.history = [];
+  b.history.push({ date:todayISO(), type:'deposito', amount:val, balanceAfter:b.balance });
   save(STORAGE_KEYS.boxes, boxes);
   renderAll();
   showToast('Depositaste '+fmt(val)+' en "'+b.name+'"');
@@ -2021,11 +2083,23 @@ async function withdrawBox(id){
   if(amount===null) return;
   const val = parseFloat(amount);
   if(!val || val<=0) return;
-  if(val>b.balance){ showToast('No tienes suficiente saldo en esta caja.'); return; }
+  if(val>b.balance){ showToast('No tienes suficiente saldo en esta cuenta.'); return; }
   b.balance -= val;
+  if(!b.history) b.history = [];
+  b.history.push({ date:todayISO(), type:'retiro', amount:-val, balanceAfter:b.balance });
   save(STORAGE_KEYS.boxes, boxes);
   renderAll();
   showToast('Retiraste '+fmt(val)+' de "'+b.name+'"');
+}
+
+function chargeAccount(accountId, amount, desc){
+  if(!accountId) return;
+  const b = boxes.find(x=>String(x.id)===String(accountId));
+  if(!b) return;
+  b.balance -= amount;
+  if(!b.history) b.history = [];
+  b.history.push({ date:todayISO(), type:'gasto', amount:-amount, balanceAfter:b.balance, desc });
+  save(STORAGE_KEYS.boxes, boxes);
 }
 
 function deleteBox(id){
@@ -2057,24 +2131,84 @@ async function simulateBox(id){
   });
 }
 
+const ACCOUNT_LABELS = { efectivo:'Efectivo', debito:'Débito', ahorro:'Ahorro' };
+const ACCOUNT_ICONS = { efectivo:'💵', debito:'💳', ahorro:'🏦' };
+const HISTORY_LABELS = { inicial:'Saldo inicial', deposito:'Depósito', retiro:'Retiro', interes:'Interés del día', gasto:'Gasto' };
+
+function openAccountHistory(id){
+  const b = boxes.find(x=>x.id===id);
+  if(!b) return;
+  document.getElementById('account-overlay-title').textContent = b.name;
+  document.getElementById('account-overlay-sub').textContent = 'Saldo actual: '+fmt(b.balance)+' · '+(ACCOUNT_LABELS[b.category]||'Ahorro');
+  const list = document.getElementById('account-history-list');
+  const hist = (b.history || []).slice().reverse();
+  if(!hist.length){ list.innerHTML = '<div class="empty">Sin movimientos registrados todavía.</div>'; }
+  else{
+    list.innerHTML = hist.map(h=>{
+      const positive = h.amount >= 0;
+      const label = HISTORY_LABELS[h.type] || h.type;
+      const icon = h.type==='interes' ? '📈' : h.type==='inicial' ? '🏁' : positive ? '➕' : '➖';
+      const descLine = h.desc ? ' · '+escapeHTML(h.desc) : '';
+      return `<div class="chip-row" style="background:${positive ? 'var(--forest-soft)' : 'var(--rust-soft)'}">
+        <div class="chip-icon">${icon}</div>
+        <div class="meta"><div class="desc">${label}${descLine}</div><div class="date">${formatDate(h.date)} · saldo: ${fmt(h.balanceAfter)}</div></div>
+        <div class="amt" style="color:${positive ? '#0F7A4E' : '#B8382C'}">${positive ? '+' : ''}${fmt(h.amount)}</div>
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('account-overlay').classList.add('show');
+}
+function closeAccountOverlay(){
+  document.getElementById('account-overlay').classList.remove('show');
+}
+
+function populateExpenseAccountOptions(){
+  const sel = document.getElementById('expense-account');
+  if(!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Ninguna / no aplica</option>' + boxes.map(b=>
+    `<option value="${b.id}">${ACCOUNT_ICONS[b.category]||'💰'} ${escapeHTML(b.name)} (${fmt(b.balance)})</option>`
+  ).join('');
+  if(boxes.some(b=>String(b.id)===current)) sel.value = current;
+}
+
+function renderAccountsBreakdown(){
+  const el = document.getElementById('accounts-breakdown');
+  if(!el) return;
+  if(!boxes.length){ el.innerHTML=''; return; }
+  const totals = {};
+  boxes.forEach(b=>{ const c=b.category||'ahorro'; totals[c]=(totals[c]||0)+b.balance; });
+  el.innerHTML = Object.keys(totals).map(c=>
+    `<span class="account-pill">${ACCOUNT_ICONS[c]||'💰'} ${fmt(totals[c])} en ${ACCOUNT_LABELS[c]||c}</span>`
+  ).join('');
+}
+
 function renderBoxes(){
   const el = document.getElementById('boxes-list');
-  if(!boxes.length){ el.innerHTML = '<div class="empty">Aún no tienes cajas de ahorro. Crea una arriba.</div>'; return; }
+  if(!boxes.length){ el.innerHTML = '<div class="empty">Aún no tienes cuentas. Crea una arriba.</div>'; return; }
   el.innerHTML = boxes.map(b=>{
-    const dailyRate = b.rate>0 ? Math.pow(1+b.rate/100, 1/365)-1 : 0;
+    const category = b.category || 'ahorro';
+    const badge = category==='ahorro'
+      ? `<div class="rate-badge">${b.rate}%<small>anual</small></div>`
+      : `<div class="rate-badge" style="background:var(--paper-dim); font-size:22px;">${ACCOUNT_ICONS[category]}</div>`;
+    const dailyRate = (category==='ahorro' && b.rate>0) ? Math.pow(1+b.rate/100, 1/365)-1 : 0;
     const dailyGain = b.balance*dailyRate;
+    const figures = category==='ahorro'
+      ? `${fmt(b.balance)} · genera ~${fmt(dailyGain)}/día`
+      : `${fmt(b.balance)} · ${ACCOUNT_LABELS[category]}`;
     return `<div class="goal-card">
       <div class="goal-top">
-        <div class="rate-badge">${b.rate}%<small>anual</small></div>
+        ${badge}
         <div class="goal-info">
           <div class="name">${escapeHTML(b.name)}</div>
-          <div class="figures">${fmt(b.balance)} · genera ~${fmt(dailyGain)}/día</div>
+          <div class="figures">${figures}</div>
         </div>
       </div>
       <div class="goal-actions four">
         <button onclick="depositBox(${b.id})">＋ Depositar</button>
         <button onclick="withdrawBox(${b.id})">－ Retirar</button>
-        <button onclick="simulateBox(${b.id})">🔮 Simular</button>
+        <button onclick="openAccountHistory(${b.id})">📜 Historial</button>
+        ${category==='ahorro' ? `<button onclick="simulateBox(${b.id})">🔮 Simular</button>` : ''}
         <button class="del" onclick="deleteBox(${b.id})">Eliminar</button>
       </div>
     </div>`;
@@ -2219,6 +2353,7 @@ function renderTodayAvailable(){
   const dateObj = new Date(todayStr+'T00:00:00');
   const opts = { weekday:'long', day:'numeric', month:'long' };
   document.getElementById('today-date').textContent = dateObj.toLocaleDateString('es-MX', opts);
+  renderAccountsBreakdown();
 }
 
 function renderSummary(){
@@ -2262,6 +2397,7 @@ function renderAll(){
   renderFixedExpenses();
   renderGoals('goals-list', false);
   renderBoxes();
+  populateExpenseAccountOptions();
   renderCalendar();
   renderDebts();
 }

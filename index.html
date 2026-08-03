@@ -368,6 +368,27 @@ main{
   margin-top:10px;
   text-align:center;
 }
+.reminder-banner{
+  background:var(--rust);
+  color:#fff;
+  border-radius:16px;
+  padding:14px 16px;
+  margin-bottom:14px;
+}
+.reminder-banner .rtitle{
+  font-family:'Rubik',sans-serif;
+  font-weight:800;
+  font-size:13px;
+  margin-bottom:6px;
+}
+.reminder-banner .rline{
+  font-family:'Rubik',sans-serif;
+  font-size:12.5px;
+  opacity:0.95;
+  padding:4px 0;
+  border-top:1px solid rgba(255,255,255,0.25);
+}
+.reminder-banner .rline:first-of-type{ border-top:none; }
 
 /* COMPLETED DEBT */
 .goal-card.completed{
@@ -863,6 +884,12 @@ nav button.active .ic{ transform:translateY(-1px); }
             <input type="date" id="income-date">
           </div>
         </div>
+        <div class="field">
+          <label>¿A qué cuenta va este ingreso? (opcional)</label>
+          <select id="income-account">
+            <option value="">Ninguna / no aplica</option>
+          </select>
+        </div>
         <button class="btn btn-income" onclick="addIncome()">Agregar ingreso</button>
       </div>
 
@@ -959,13 +986,36 @@ nav button.active .ic{ transform:translateY(-1px); }
 
     <!-- METAS -->
     <section class="view" id="view-metas">
+      <div id="goal-reminders"></div>
       <div class="card">
-        <h2>Nueva meta de deuda</h2>
+        <h2>Nueva meta</h2>
         <div class="field">
-          <label>Nombre de la deuda</label>
-          <input type="text" id="goal-name" placeholder="Ej. Tarjeta de crédito">
+          <label>Tipo de meta</label>
+          <div class="toggle-group" id="goal-type-toggle">
+            <button type="button" class="active" data-type="standalone">🎯 Meta libre</button>
+            <button type="button" data-type="debt">💳 Pagar una deuda</button>
+            <button type="button" data-type="savings">🏦 Ahorrar para algo</button>
+          </div>
         </div>
-        <div class="row2">
+        <div class="field">
+          <label>Nombre de la meta</label>
+          <input type="text" id="goal-name" placeholder="Ej. Vacaciones, Tarjeta de crédito">
+        </div>
+
+        <div class="field" id="goal-debt-link-wrap" style="display:none">
+          <label>¿Qué deuda quieres pagar?</label>
+          <select id="goal-debt-link">
+            <option value="">Selecciona una deuda</option>
+          </select>
+        </div>
+        <div class="field" id="goal-savings-link-wrap" style="display:none">
+          <label>¿En qué cuenta la vas a ahorrar?</label>
+          <select id="goal-savings-link">
+            <option value="">Selecciona una cuenta</option>
+          </select>
+        </div>
+
+        <div class="row2" id="goal-total-wrap">
           <div class="field">
             <label>Monto total</label>
             <input type="number" id="goal-total" placeholder="5000" inputmode="decimal">
@@ -975,7 +1025,13 @@ nav button.active .ic{ transform:translateY(-1px); }
             <input type="number" id="goal-monthly" placeholder="500" inputmode="decimal">
           </div>
         </div>
+        <div class="field" id="goal-payday-wrap" style="display:none">
+          <label>Día del mes en que debes pagar</label>
+          <input type="number" id="goal-payday" placeholder="15" min="1" max="31" inputmode="numeric">
+        </div>
+
         <button class="btn btn-goal" onclick="addGoal()">Crear meta</button>
+        <p class="fab-note" id="goal-form-note">Una meta libre la manejas tú manualmente, sin conectarla a nada.</p>
       </div>
 
       <p class="section-title">Tus metas</p>
@@ -1059,6 +1115,7 @@ nav button.active .ic{ transform:translateY(-1px); }
 
     <!-- DEUDAS -->
     <section class="view" id="view-deudas">
+      <div id="debt-reminders"></div>
       <div class="card">
         <h2 id="debt-form-title">Nueva tarjeta o crédito</h2>
         <div class="field">
@@ -1141,10 +1198,10 @@ nav button.active .ic{ transform:translateY(-1px); }
     <button class="active" data-view="resumen"><span class="ic">📊</span>Resumen</button>
     <button data-view="ingresos"><span class="ic">💵</span>Ingresos</button>
     <button data-view="gastos"><span class="ic">🧾</span>Gastos</button>
+    <button data-view="deudas"><span class="ic">💳</span>Deudas</button>
     <button data-view="metas"><span class="ic">🎯</span>Metas</button>
     <button data-view="ahorro"><span class="ic">🏦</span>Cuentas</button>
     <button data-view="calendario"><span class="ic">📅</span>Calendario</button>
-    <button data-view="deudas"><span class="ic">💳</span>Deudas</button>
   </nav>
 
   <button class="mic-btn" id="mic-btn" title="Registrar por voz">🎙️</button>
@@ -1385,11 +1442,15 @@ function addIncome(){
   const amount = parseFloat(document.getElementById('income-amount').value);
   const date = document.getElementById('income-date').value || todayISO();
   const source = document.getElementById('income-source').value;
+  const accountId = document.getElementById('income-account').value || null;
   if(!amount || amount<=0){ alert('Pon un monto válido.'); return; }
-  incomes.unshift({ id:Date.now(), desc: desc || SOURCE_META[source].defaultDesc, amount, date, type: source });
+  const finalDesc = desc || SOURCE_META[source].defaultDesc;
+  incomes.unshift({ id:Date.now(), desc: finalDesc, amount, date, type: source });
   save(STORAGE_KEYS.income, incomes);
+  depositToAccount(accountId, amount, finalDesc);
   document.getElementById('income-desc').value='';
   document.getElementById('income-amount').value='';
+  document.getElementById('income-account').value='';
   renderAll();
 }
 function deleteIncome(id){
@@ -1459,20 +1520,80 @@ function deleteExpense(id){
 }
 
 // ---- GOALS ----
+let currentGoalType = 'standalone';
+document.querySelectorAll('#goal-type-toggle button').forEach(btn=>{
+  btn.addEventListener('click', ()=> setGoalTypeToggle(btn.dataset.type));
+});
+
+function setGoalTypeToggle(type){
+  currentGoalType = type;
+  document.querySelectorAll('#goal-type-toggle button').forEach(b=>b.classList.toggle('active', b.dataset.type===type));
+  document.getElementById('goal-debt-link-wrap').style.display = type==='debt' ? 'block' : 'none';
+  document.getElementById('goal-savings-link-wrap').style.display = type==='savings' ? 'block' : 'none';
+  document.getElementById('goal-total-wrap').style.display = type==='debt' ? 'none' : 'grid';
+  document.getElementById('goal-payday-wrap').style.display = type==='debt' ? 'block' : 'none';
+  const notes = {
+    standalone: 'Una meta libre la manejas tú manualmente, sin conectarla a nada.',
+    debt: 'Cada vez que marques la mensualidad como pagada, se abonará automáticamente a esa deuda y se registrará como gasto.',
+    savings: 'Cada vez que marques el aporte como hecho, se depositará automáticamente en esa cuenta.'
+  };
+  document.getElementById('goal-form-note').textContent = notes[type];
+  if(type==='debt') populateGoalDebtSelect();
+  if(type==='savings') populateGoalSavingsSelect();
+}
+function populateGoalDebtSelect(){
+  const sel = document.getElementById('goal-debt-link');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">Selecciona una deuda</option>' + debts.filter(d=>!d.completed).map(d=>
+    `<option value="${d.id}">${escapeHTML(d.name)} (debes ${fmt(d.balance)})</option>`
+  ).join('');
+}
+function populateGoalSavingsSelect(){
+  const sel = document.getElementById('goal-savings-link');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">Selecciona una cuenta</option>' + boxes.map(b=>
+    `<option value="${b.id}">${ACCOUNT_ICONS[b.category]||'💰'} ${escapeHTML(b.name)} (${fmt(b.balance)})</option>`
+  ).join('');
+}
+
 function addGoal(){
   const name = document.getElementById('goal-name').value.trim();
-  const total = parseFloat(document.getElementById('goal-total').value);
   const monthly = parseFloat(document.getElementById('goal-monthly').value) || 0;
-  if(!name || !total || total<=0){ alert('Completa nombre y monto total.'); return; }
-  goals.unshift({ id:Date.now(), name, total, monthly, paid:0 });
+  if(!name){ alert('Ponle un nombre a tu meta.'); return; }
+
+  if(currentGoalType==='debt'){
+    const linkedDebtId = document.getElementById('goal-debt-link').value;
+    const payday = parseInt(document.getElementById('goal-payday').value) || null;
+    if(!linkedDebtId){ alert('Selecciona a qué deuda quieres vincular esta meta.'); return; }
+    goals.unshift({ id:Date.now(), name, type:'debt', linkedDebtId, monthly, paymentDay:payday, lastPaidMonth:null });
+  } else if(currentGoalType==='savings'){
+    const linkedAccountId = document.getElementById('goal-savings-link').value;
+    const total = parseFloat(document.getElementById('goal-total').value) || 0;
+    if(!linkedAccountId){ alert('Selecciona en qué cuenta vas a ahorrar.'); return; }
+    if(!total || total<=0){ alert('Ponle un monto total a tu meta.'); return; }
+    goals.unshift({ id:Date.now(), name, type:'savings', linkedAccountId, total, monthly, paid:0, lastPaidMonth:null });
+  } else {
+    const total = parseFloat(document.getElementById('goal-total').value) || 0;
+    if(!total || total<=0){ alert('Ponle un monto total a tu meta.'); return; }
+    goals.unshift({ id:Date.now(), name, type:'standalone', total, monthly, paid:0 });
+  }
+
   save(STORAGE_KEYS.goals, goals);
   document.getElementById('goal-name').value='';
   document.getElementById('goal-total').value='';
   document.getElementById('goal-monthly').value='';
+  document.getElementById('goal-payday').value='';
+  document.getElementById('goal-debt-link').value='';
+  document.getElementById('goal-savings-link').value='';
   renderAll();
+  showToast('Meta "'+name+'" creada');
 }
+
 async function payGoal(id){
   const g = goals.find(g=>g.id===id);
+  if(!g) return;
+  if(g.type==='savings') return payGoalSavingsExtra(id);
+  if(g.type==='debt') return;
   const amount = await openModal({
     title:'Abonar a "'+g.name+'"',
     message:'¿Cuánto quieres abonar? Se registrará también como gasto.',
@@ -1489,6 +1610,95 @@ async function payGoal(id){
   renderAll();
   showToast('Abonaste '+fmt(val)+' a "'+g.name+'"');
 }
+
+async function payGoalSavingsExtra(id){
+  const g = goals.find(x=>x.id===id);
+  if(!g) return;
+  const b = boxes.find(x=>x.id===g.linkedAccountId);
+  if(!b){ showToast('La cuenta vinculada ya no existe.'); return; }
+  const amount = await openModal({ title:'Aportar a "'+g.name+'"', message:'¿Cuánto quieres aportar extra a esta meta?', confirmText:'Aportar' });
+  if(amount===null) return;
+  const val = parseFloat(amount);
+  if(!val || val<=0) return;
+  b.balance += val;
+  if(!b.history) b.history = [];
+  b.history.push({ date:todayISO(), type:'deposito', amount:val, balanceAfter:b.balance, desc:'Aporte a meta: '+g.name });
+  save(STORAGE_KEYS.boxes, boxes);
+  const justCompleted = (g.paid < g.total) && (g.paid+val >= g.total);
+  g.paid = Math.min(g.total, g.paid + val);
+  save(STORAGE_KEYS.goals, goals);
+  renderAll();
+  if(justCompleted){ celebrateGoalSaved(g.name); }
+  else{ showToast('Aportaste '+fmt(val)+' a "'+g.name+'"'); }
+}
+
+async function markGoalMonthlyPaid(id){
+  const g = goals.find(x=>x.id===id);
+  if(!g) return;
+  const curMonth = todayISO().slice(0,7);
+  if(g.lastPaidMonth===curMonth){ showToast('Ya marcaste esta meta el mes en curso.'); return; }
+  if(!g.monthly || g.monthly<=0){ showToast('Edítala y ponle un monto mensual primero.'); return; }
+
+  if(g.type==='debt'){
+    const d = debts.find(x=>x.id===g.linkedDebtId);
+    if(!d){ showToast('La deuda vinculada ya no existe.'); return; }
+    const pay = Math.min(g.monthly, d.balance);
+    d.balance = Math.max(0, d.balance - pay);
+    const justCompleted = markCompletedIfNeeded(d);
+    save(STORAGE_KEYS.debts, debts);
+    expenses.unshift({ id:Date.now(), desc:'Abono meta: '+g.name, cat:'Deuda', amount:pay, date:todayISO() });
+    save(STORAGE_KEYS.expense, expenses);
+    g.lastPaidMonth = curMonth;
+    save(STORAGE_KEYS.goals, goals);
+    renderAll();
+    if(justCompleted){ celebrateDebtPaid(d.name); }
+    else{ showToast('Abonaste '+fmt(pay)+' a "'+d.name+'" desde tu meta'); }
+  } else if(g.type==='savings'){
+    const b = boxes.find(x=>x.id===g.linkedAccountId);
+    if(!b){ showToast('La cuenta vinculada ya no existe.'); return; }
+    const remaining = Math.max(0, g.total - g.paid);
+    if(remaining<=0){ showToast('Ya completaste esta meta.'); return; }
+    const pay = Math.min(g.monthly, remaining);
+    b.balance += pay;
+    if(!b.history) b.history = [];
+    b.history.push({ date:todayISO(), type:'deposito', amount:pay, balanceAfter:b.balance, desc:'Aporte a meta: '+g.name });
+    save(STORAGE_KEYS.boxes, boxes);
+    g.paid = Math.min(g.total, g.paid + pay);
+    g.lastPaidMonth = curMonth;
+    const justCompleted = g.paid >= g.total;
+    save(STORAGE_KEYS.goals, goals);
+    renderAll();
+    if(justCompleted){ celebrateGoalSaved(g.name); }
+    else{ showToast('Aportaste '+fmt(pay)+' a "'+g.name+'"'); }
+  }
+}
+
+function getOverdueGoalReminders(){
+  const curMonth = todayISO().slice(0,7);
+  const todayDay = new Date().getDate();
+  return goals.filter(g=>{
+    if(g.type!=='debt' || !g.paymentDay) return false;
+    const d = debts.find(x=>x.id===g.linkedDebtId);
+    if(!d || d.completed) return false;
+    if(g.lastPaidMonth===curMonth) return false;
+    return todayDay >= g.paymentDay;
+  });
+}
+function renderReminders(){
+  const overdue = getOverdueGoalReminders();
+  const html = overdue.length ? `<div class="reminder-banner">
+    <div class="rtitle">⚠️ Tienes pagos de metas pendientes este mes</div>
+    ${overdue.map(g=>{
+      const d = debts.find(x=>x.id===g.linkedDebtId);
+      return `<div class="rline">"${escapeHTML(g.name)}" vencía el día ${g.paymentDay} — abona ${fmt(g.monthly)} a "${d ? escapeHTML(d.name) : ''}"</div>`;
+    }).join('')}
+  </div>` : '';
+  const a = document.getElementById('debt-reminders');
+  const b = document.getElementById('goal-reminders');
+  if(a) a.innerHTML = html;
+  if(b) b.innerHTML = html;
+}
+
 function deleteGoal(id){
   goals = goals.filter(g=>g.id!==id);
   save(STORAGE_KEYS.goals, goals);
@@ -1608,15 +1818,15 @@ function spawnConfetti(){
     setTimeout(()=>piece.remove(), 4200);
   }
 }
-function celebrateDebtPaid(name){
+function celebrateMilestone(title, message){
   spawnConfetti();
-  openModal({
-    title:'🎉 ¡Felicidades!',
-    message:'Terminaste de pagar "'+name+'" por completo. Un peso menos de deuda es una gran noticia — sigue así.',
-    showInput:false,
-    showCancel:false,
-    confirmText:'¡Gracias!'
-  });
+  openModal({ title, message, showInput:false, showCancel:false, confirmText:'¡Gracias!' });
+}
+function celebrateDebtPaid(name){
+  celebrateMilestone('🎉 ¡Felicidades!', 'Terminaste de pagar "'+name+'" por completo. Un peso menos de deuda es una gran noticia — sigue así.');
+}
+function celebrateGoalSaved(name){
+  celebrateMilestone('🎉 ¡Meta cumplida!', 'Terminaste de ahorrar para "'+name+'". ¡Bien hecho!');
 }
 function markCompletedIfNeeded(d){
   if(d.balance<=0 && !d.completed){
@@ -2101,6 +2311,15 @@ function chargeAccount(accountId, amount, desc){
   b.history.push({ date:todayISO(), type:'gasto', amount:-amount, balanceAfter:b.balance, desc });
   save(STORAGE_KEYS.boxes, boxes);
 }
+function depositToAccount(accountId, amount, desc){
+  if(!accountId) return;
+  const b = boxes.find(x=>String(x.id)===String(accountId));
+  if(!b) return;
+  b.balance += amount;
+  if(!b.history) b.history = [];
+  b.history.push({ date:todayISO(), type:'deposito', amount, balanceAfter:b.balance, desc });
+  save(STORAGE_KEYS.boxes, boxes);
+}
 
 function deleteBox(id){
   boxes = boxes.filter(b=>b.id!==id);
@@ -2162,14 +2381,18 @@ function closeAccountOverlay(){
   document.getElementById('account-overlay').classList.remove('show');
 }
 
-function populateExpenseAccountOptions(){
-  const sel = document.getElementById('expense-account');
+function populateAccountSelect(selectId){
+  const sel = document.getElementById(selectId);
   if(!sel) return;
   const current = sel.value;
   sel.innerHTML = '<option value="">Ninguna / no aplica</option>' + boxes.map(b=>
     `<option value="${b.id}">${ACCOUNT_ICONS[b.category]||'💰'} ${escapeHTML(b.name)} (${fmt(b.balance)})</option>`
   ).join('');
   if(boxes.some(b=>String(b.id)===current)) sel.value = current;
+}
+function populateExpenseAccountOptions(){
+  populateAccountSelect('expense-account');
+  populateAccountSelect('income-account');
 }
 
 function renderAccountsBreakdown(){
@@ -2230,13 +2453,66 @@ function renderGoals(targetId, compact){
   const el = document.getElementById(targetId);
   if(!goals.length){ el.innerHTML = '<div class="empty">Aún no tienes metas registradas.</div>'; return; }
   el.innerHTML = goals.map(g=>{
+    const type = g.type || 'standalone';
+    const curMonth = todayISO().slice(0,7);
+
+    if(type==='debt'){
+      const d = debts.find(x=>x.id===g.linkedDebtId);
+      const debtGone = !d;
+      const debtDone = d && d.completed;
+      const pct = (d && d.limit>0) ? Math.min(100, Math.round((d.balance/d.limit)*100)) : 0;
+      const paidThisMonth = g.lastPaidMonth === curMonth;
+      return `<div class="goal-card">
+        <div class="goal-top">
+          <div class="ring">${ringSVG(debtDone?100:pct, debtDone?'#17B978':'#FF5C4D')}<div class="pct">${debtDone?'✓':pct+'%'}</div></div>
+          <div class="goal-info">
+            <div class="name">💳 ${escapeHTML(g.name)}</div>
+            <div class="figures">${debtGone ? 'La deuda vinculada ya no existe' : debtDone ? 'Deuda liquidada 🎉' : 'Vinculada a "'+escapeHTML(d.name)+'" · debes '+fmt(d.balance)}</div>
+            <div class="figures" style="margin-top:2px;">Pago mensual: ${fmt(g.monthly)}${g.paymentDay ? ' · vence el día '+g.paymentDay : ''}</div>
+          </div>
+        </div>
+        ${(!debtGone && !debtDone) ? `<button class="monthly-check${paidThisMonth?' checked':''}" onclick="markGoalMonthlyPaid(${g.id})" ${paidThisMonth?'disabled':''}>
+          ${paidThisMonth ? '✓ Mensualidad de este mes pagada' : 'Marcar mensualidad de este mes como pagada'}
+        </button>` : ''}
+        ${compact ? '' : `<div class="goal-actions">
+          <button class="del" onclick="deleteGoal(${g.id})">Eliminar meta</button>
+        </div>`}
+      </div>`;
+    }
+
+    if(type==='savings'){
+      const b = boxes.find(x=>x.id===g.linkedAccountId);
+      const pct = Math.min(100, Math.round((g.paid/g.total)*100));
+      const remaining = Math.max(0, g.total - g.paid);
+      const paidThisMonth = g.lastPaidMonth === curMonth;
+      const done = g.paid >= g.total;
+      return `<div class="goal-card">
+        <div class="goal-top">
+          <div class="ring">${ringSVG(pct, done?'#17B978':'#9B5DE5')}<div class="pct">${done?'✓':pct+'%'}</div></div>
+          <div class="goal-info">
+            <div class="name">🏦 ${escapeHTML(g.name)}</div>
+            <div class="figures">${fmt(g.paid)} de ${fmt(g.total)} · faltan ${fmt(remaining)}</div>
+            <div class="figures" style="margin-top:2px;">${b ? 'Se guarda en "'+escapeHTML(b.name)+'"' : 'La cuenta vinculada ya no existe'}${g.monthly ? ' · aporte mensual '+fmt(g.monthly) : ''}</div>
+          </div>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${pct}%; background:#9B5DE5;"></div></div>
+        ${(!done && b && g.monthly>0) ? `<button class="monthly-check${paidThisMonth?' checked':''}" onclick="markGoalMonthlyPaid(${g.id})" ${paidThisMonth?'disabled':''}>
+          ${paidThisMonth ? '✓ Aporte de este mes hecho' : 'Marcar aporte de este mes como hecho'}
+        </button>` : ''}
+        ${compact ? '' : `<div class="goal-actions">
+          <button onclick="payGoal(${g.id})">＋ Aportar extra</button>
+          <button class="del" onclick="deleteGoal(${g.id})">Eliminar</button>
+        </div>`}
+      </div>`;
+    }
+
     const pct = Math.min(100, Math.round((g.paid/g.total)*100));
     const remaining = g.total - g.paid;
     return `<div class="goal-card">
       <div class="goal-top">
         <div class="ring">${ringSVG(pct)}<div class="pct">${pct}%</div></div>
         <div class="goal-info">
-          <div class="name">${escapeHTML(g.name)}</div>
+          <div class="name">🎯 ${escapeHTML(g.name)}</div>
           <div class="figures">${fmt(g.paid)} de ${fmt(g.total)} · faltan ${fmt(remaining)}</div>
         </div>
       </div>
@@ -2400,6 +2676,9 @@ function renderAll(){
   populateExpenseAccountOptions();
   renderCalendar();
   renderDebts();
+  renderReminders();
+  populateGoalDebtSelect();
+  populateGoalSavingsSelect();
 }
 
 accrueInterest();

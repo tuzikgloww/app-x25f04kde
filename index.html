@@ -1012,6 +1012,7 @@ nav button.active .ic{ transform:translateY(-1px); }
         <button class="btn btn-ghost" id="expense-cancel-edit" style="display:none; margin-top:8px;" onclick="cancelExpenseEdit()">Cancelar edición</button>
       </div>
 
+      <div id="fixed-reminders"></div>
       <p class="section-title">Gastos fijos mensuales</p>
       <div class="ledger" id="fixed-list"></div>
 
@@ -2028,44 +2029,56 @@ function accruePlanPayments(){
   if(changedExpenses) save(STORAGE_KEYS.expense, expenses);
 }
 
-function accrueFixedExpenses(){
-  const curMonthKey = todayISO().slice(0,7);
-  let changed = false;
-  fixedExpenses.forEach(f=>{
-    if(!f.active) return;
-    if(!f.lastPostedMonth){ f.lastPostedMonth = curMonthKey; return; }
-    let [ly, lm] = f.lastPostedMonth.split('-').map(Number);
-    const [cy, cm] = curMonthKey.split('-').map(Number);
-    let monthsElapsed = (cy - ly) * 12 + (cm - lm);
-    for(let i=1; i<=monthsElapsed; i++){
-      const target = new Date(ly, lm-1+i, 1);
-      const y = target.getFullYear(), m = target.getMonth();
-      const daysInM = new Date(y, m+1, 0).getDate();
-      const day = Math.min(f.dayOfMonth||1, daysInM);
-      let dateISO = y+'-'+pad2(m+1)+'-'+pad2(day);
-      if(dateISO > todayISO()) dateISO = todayISO();
-      const expId = Date.now()+Math.random();
-      expenses.unshift({ id:expId, desc:f.desc+' (fijo)', cat:f.cat, subcat:f.subcat||null, amount:f.amount, date:dateISO, fixedId:f.id, accountId:f.accountId });
-      changed = true;
-      chargeAccount(f.accountId, f.amount, f.desc, expId);
-    }
-    if(monthsElapsed > 0) f.lastPostedMonth = curMonthKey;
-  });
-  if(changed){ save(STORAGE_KEYS.fixed, fixedExpenses); save(STORAGE_KEYS.expense, expenses); }
+function markFixedExpensePaid(id){
+  const f = fixedExpenses.find(x=>x.id===id);
+  if(!f) return;
+  const curMonth = todayISO().slice(0,7);
+  if(f.lastPostedMonth===curMonth){ showToast('Ya marcaste este gasto fijo el mes en curso.'); return; }
+  const expId = Date.now()+Math.random();
+  expenses.unshift({ id:expId, desc:f.desc+' (fijo)', cat:f.cat, subcat:f.subcat||null, amount:f.amount, date:todayISO(), fixedId:f.id, accountId:f.accountId });
+  save(STORAGE_KEYS.expense, expenses);
+  chargeAccount(f.accountId, f.amount, f.desc, expId);
+  f.lastPostedMonth = curMonth;
+  save(STORAGE_KEYS.fixed, fixedExpenses);
+  renderAll();
+  showToast('"'+f.desc+'" marcado como pagado');
+}
+
+function getOverdueFixedExpenses(){
+  const curMonth = todayISO().slice(0,7);
+  const todayDay = new Date().getDate();
+  return fixedExpenses.filter(f => f.lastPostedMonth!==curMonth && todayDay >= (f.dayOfMonth||1));
+}
+
+function renderFixedReminders(){
+  const el = document.getElementById('fixed-reminders');
+  if(!el) return;
+  const overdue = getOverdueFixedExpenses();
+  el.innerHTML = overdue.length ? `<div class="reminder-banner">
+    <div class="rtitle">⚠️ Tienes gastos fijos pendientes de marcar</div>
+    ${overdue.map(f=>`<div class="rline">"${escapeHTML(f.desc)}" vencía el día ${f.dayOfMonth||1} — ${fmt(f.amount)}</div>`).join('')}
+  </div>` : '';
 }
 
 function renderFixedExpenses(){
   const el = document.getElementById('fixed-list');
   if(!fixedExpenses.length){ el.innerHTML = '<div class="empty">Aún no tienes gastos fijos. Márcalos al agregar un gasto arriba.</div>'; return; }
+  const curMonth = todayISO().slice(0,7);
   el.innerHTML = fixedExpenses.map(f=>{
     const bg = CAT_PASTEL[f.cat] || CAT_PASTEL.Otro;
     const icon = CAT_ICON[f.cat] || '📦';
-    return `<div class="chip-row" style="background:${bg}">
-      <div class="chip-icon">${icon}</div>
-      <div class="meta"><div class="desc">${escapeHTML(f.desc)}</div><div class="date">${f.cat} · se repite cada mes</div></div>
-      <div class="amt" style="color:#B8382C">−${fmt(f.amount)}</div>
-      <button class="del" onclick="editFixedExpense(${f.id})" aria-label="Editar">✎</button>
-      <button class="del" onclick="deleteFixedExpense(${f.id})" aria-label="Eliminar">✕</button>
+    const paidThisMonth = f.lastPostedMonth === curMonth;
+    return `<div>
+      <div class="chip-row" style="background:${bg}">
+        <div class="chip-icon">${icon}</div>
+        <div class="meta"><div class="desc">${escapeHTML(f.desc)}</div><div class="date">${f.cat} · vence el día ${f.dayOfMonth||1} de cada mes</div></div>
+        <div class="amt" style="color:#B8382C">−${fmt(f.amount)}</div>
+        <button class="del" onclick="editFixedExpense(${f.id})" aria-label="Editar">✎</button>
+        <button class="del" onclick="deleteFixedExpense(${f.id})" aria-label="Eliminar">✕</button>
+      </div>
+      <button class="monthly-check${paidThisMonth?' checked':''}" style="margin-top:8px;" onclick="markFixedExpensePaid(${f.id})" ${paidThisMonth?'disabled':''}>
+        ${paidThisMonth ? '✓ Pagado este mes' : 'Marcar como pagado este mes'}
+      </button>
     </div>`;
   }).join('');
 }
@@ -2081,11 +2094,18 @@ async function editFixedExpense(id){
   if(newDesc===null) return;
   if(newDesc.trim()) f.desc = newDesc.trim();
 
-  const newAmount = await openModal({ title:'Monto mensual', message:'¿Cuánto es la mensualidad ahora?', inputValue:f.amount, confirmText:'Guardar' });
+  const newAmount = await openModal({ title:'Monto mensual', message:'¿Cuánto es la mensualidad ahora?', inputValue:f.amount, confirmText:'Siguiente' });
   if(newAmount!==null){
     const val = parseFloat(newAmount);
     if(!isNaN(val) && val>0) f.amount = val;
   }
+
+  const newDay = await openModal({ title:'Día de vencimiento', message:'¿Qué día del mes vence este gasto fijo?', inputValue:f.dayOfMonth||1, confirmText:'Guardar' });
+  if(newDay!==null){
+    const d = parseInt(newDay);
+    if(!isNaN(d) && d>=1 && d<=31) f.dayOfMonth = d;
+  }
+
   save(STORAGE_KEYS.fixed, fixedExpenses);
   renderAll();
   showToast('Gasto fijo actualizado');
@@ -2941,6 +2961,7 @@ function renderAll(){
   renderLedger('income-list', filterBySearch(incomes, 'income', incomeSearchQuery), 'income', incomeSearchQuery);
   renderLedger('expense-list', filterBySearch(expenses, 'expense', expenseSearchQuery), 'expense', expenseSearchQuery);
   renderFixedExpenses();
+  renderFixedReminders();
   renderGoals('goals-list', false);
   renderBoxes();
   populateExpenseAccountOptions();
@@ -2954,7 +2975,6 @@ function renderAll(){
 accrueInterest();
 accrueDebts();
 accruePlanPayments();
-accrueFixedExpenses();
 renderAll();
 
 if(completedAtLoad.length){

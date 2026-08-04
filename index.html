@@ -898,6 +898,7 @@ nav button.active .ic{ transform:translateY(-1px); }
             <option value="negocio">Negocio</option>
             <option value="regalo">Regalo</option>
             <option value="transferencia">Transferencia de alguien</option>
+            <option value="interes">Interés generado</option>
             <option value="otro">Otro</option>
           </select>
         </div>
@@ -1344,6 +1345,7 @@ const SOURCE_META = {
   negocio: { label:'Negocio', color:'#3D8BFF', defaultDesc:'Ingreso de negocio' },
   regalo: { label:'Regalo', color:'#FFC93C', defaultDesc:'Regalo recibido' },
   transferencia: { label:'Transferencia', color:'#9B5DE5', defaultDesc:'Transferencia recibida' },
+  interes: { label:'Interés generado', color:'#2EC4B6', defaultDesc:'Interés de cuenta de ahorro' },
   otro: { label:'Otro', color:'#A9A3C2', defaultDesc:'Ingreso' }
 };
 const CAT_PASTEL = {
@@ -1364,9 +1366,9 @@ const CAT_ICON = {
   'Salud': '🩺', 'Ocio': '🎉', 'Otro': '📦'
 };
 const SOURCE_PASTEL = {
-  fijo: '#D9F6E7', negocio: '#DCEBFF', regalo: '#FFF3CE', transferencia: '#EFE2FC', otro: '#EBE9F5'
+  fijo: '#D9F6E7', negocio: '#DCEBFF', regalo: '#FFF3CE', transferencia: '#EFE2FC', interes: '#D2F5F0', otro: '#EBE9F5'
 };
-const SOURCE_ICON = { fijo:'💼', negocio:'📈', regalo:'🎁', transferencia:'🔁', otro:'💵' };
+const SOURCE_ICON = { fijo:'💼', negocio:'📈', regalo:'🎁', transferencia:'🔁', interes:'📈', otro:'💵' };
 
 function chipRowHTML(it, kind, opts){
   opts = opts || {};
@@ -2359,6 +2361,7 @@ function renderDebts(){
 function accrueInterest(){
   const todayStr = todayISO();
   let changed = false;
+  let incomesChanged = false;
   boxes.forEach(b=>{
     if(!b.category) b.category = 'ahorro';
     if(!b.history){ b.history = [{ id:Date.now()+Math.random(), date:b.lastAccrual||todayStr, type:'inicial', amount:b.balance, balanceAfter:b.balance }]; changed = true; }
@@ -2372,13 +2375,17 @@ function accrueInterest(){
         const gain = b.balance * dailyRate;
         b.balance += gain;
         const dISO = cursor.getFullYear()+'-'+pad2(cursor.getMonth()+1)+'-'+pad2(cursor.getDate());
-        b.history.push({ id:Date.now()+Math.random(), date:dISO, type:'interes', amount:gain, balanceAfter:b.balance });
+        const incomeId = Date.now()+Math.random();
+        b.history.push({ id:Date.now()+Math.random(), date:dISO, type:'interes', amount:gain, balanceAfter:b.balance, refId:incomeId });
+        incomes.unshift({ id:incomeId, desc:'Interés — '+b.name, amount:gain, date:dISO, type:'interes', accountId:b.id });
+        incomesChanged = true;
       }
       changed = true;
     }
     b.lastAccrual = todayStr;
   });
   if(changed) save(STORAGE_KEYS.boxes, boxes);
+  if(incomesChanged) save(STORAGE_KEYS.income, incomes);
 }
 
 let currentAccountCategory = 'ahorro';

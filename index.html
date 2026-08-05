@@ -2838,41 +2838,50 @@ function renderMonthComparison(){
   if(!el) return;
   const now = new Date();
   const curYear = now.getFullYear(), curMonth = now.getMonth();
+  const todayDay = now.getDate();
+  const curMonthName = MESES_FULL[curMonth];
   const prevDate = new Date(curYear, curMonth-1, 1);
   const prevYear = prevDate.getFullYear(), prevMonth = prevDate.getMonth();
   const prevMonthName = MESES_FULL[prevMonth];
+  const daysInPrevMonth = new Date(prevYear, prevMonth+1, 0).getDate();
+  const compareDay = Math.min(todayDay, daysInPrevMonth);
 
-  const sumForMonth = (items, y, m) => {
-    const prefix = y+'-'+pad2(m+1);
-    return items.filter(it=>it.date.startsWith(prefix)).reduce((s,it)=>s+it.amount,0);
+  const sumUpToDay = (items, y, m, day) => {
+    const monthPrefix = y+'-'+pad2(m+1);
+    return items.filter(it=>{
+      if(!it.date.startsWith(monthPrefix+'-')) return false;
+      const d = parseInt(it.date.slice(8,10), 10);
+      return d <= day;
+    }).reduce((s,it)=>s+it.amount,0);
   };
 
-  const curExpense = sumForMonth(expenses, curYear, curMonth);
-  const prevExpense = sumForMonth(expenses, prevYear, prevMonth);
-  const curIncome = sumForMonth(incomes, curYear, curMonth);
-  const prevIncome = sumForMonth(incomes, prevYear, prevMonth);
+  const curExpense = sumUpToDay(expenses, curYear, curMonth, todayDay);
+  const prevExpense = sumUpToDay(expenses, prevYear, prevMonth, compareDay);
+  const curIncome = sumUpToDay(incomes, curYear, curMonth, todayDay);
+  const prevIncome = sumUpToDay(incomes, prevYear, prevMonth, compareDay);
   const curBalance = curIncome - curExpense;
   const prevBalance = prevIncome - prevExpense;
 
   if(prevExpense<=0 && prevIncome<=0){
-    el.innerHTML = '<div class="compare-line">Aún no hay suficiente historial de '+prevMonthName+' para comparar.</div>';
+    el.innerHTML = '<div class="compare-line">Aún no hay suficiente historial de '+prevMonthName+' hasta el día '+compareDay+' para comparar.</div>';
     return;
   }
 
+  const todayLabel = 'Hoy '+todayDay+' de '+curMonthName;
   const lines = [];
   if(prevExpense>0){
     const diffPct = Math.round(((curExpense-prevExpense)/prevExpense)*100);
-    if(diffPct>0) lines.push({ icon:'📈', tone:'bad', text:'Gastaste '+diffPct+'% más que en '+prevMonthName+' ('+fmt(curExpense)+' vs '+fmt(prevExpense)+')' });
-    else if(diffPct<0) lines.push({ icon:'📉', tone:'good', text:'Gastaste '+Math.abs(diffPct)+'% menos que en '+prevMonthName+' ('+fmt(curExpense)+' vs '+fmt(prevExpense)+')' });
-    else lines.push({ icon:'➡️', tone:'', text:'Gastaste igual que en '+prevMonthName+' ('+fmt(curExpense)+')' });
+    if(diffPct>0) lines.push({ icon:'📈', tone:'bad', text: todayLabel+' llevas gastado '+diffPct+'% más que en '+prevMonthName+' hasta el día '+compareDay+' ('+fmt(curExpense)+' vs '+fmt(prevExpense)+')' });
+    else if(diffPct<0) lines.push({ icon:'📉', tone:'good', text: todayLabel+' llevas gastado '+Math.abs(diffPct)+'% menos que en '+prevMonthName+' hasta el día '+compareDay+' ('+fmt(curExpense)+' vs '+fmt(prevExpense)+')' });
+    else lines.push({ icon:'➡️', tone:'', text: todayLabel+' llevas gastado igual que en '+prevMonthName+' hasta el día '+compareDay+' ('+fmt(curExpense)+')' });
   } else if(curExpense>0){
-    lines.push({ icon:'📈', tone:'', text:'En '+prevMonthName+' no tenías gastos registrados, este mes llevas '+fmt(curExpense) });
+    lines.push({ icon:'📈', tone:'', text:'En '+prevMonthName+' no tenías gastos hasta el día '+compareDay+', '+todayLabel.toLowerCase()+' ya llevas '+fmt(curExpense) });
   }
 
   const balanceDiff = curBalance - prevBalance;
   if(Math.round(balanceDiff)!==0){
-    if(balanceDiff>0) lines.push({ icon:'💰', tone:'good', text:'Te queda '+fmt(Math.abs(balanceDiff))+' más disponible que en '+prevMonthName });
-    else lines.push({ icon:'⚠️', tone:'bad', text:'Te queda '+fmt(Math.abs(balanceDiff))+' menos disponible que en '+prevMonthName });
+    if(balanceDiff>0) lines.push({ icon:'💰', tone:'good', text:'Llevas '+fmt(Math.abs(balanceDiff))+' más disponible que en '+prevMonthName+' a estas alturas del mes' });
+    else lines.push({ icon:'⚠️', tone:'bad', text:'Llevas '+fmt(Math.abs(balanceDiff))+' menos disponible que en '+prevMonthName+' a estas alturas del mes' });
   }
 
   el.innerHTML = lines.map(l=>`<div class="compare-line ${l.tone}"><span class="cicon">${l.icon}</span>${l.text}</div>`).join('');

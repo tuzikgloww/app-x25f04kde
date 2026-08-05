@@ -54,6 +54,52 @@ body{
 }
 @media (prefers-reduced-motion: reduce){ *{animation-duration:0.01ms !important; transition-duration:0.01ms !important;} }
 
+/* AUTH SCREEN */
+.auth-screen{
+  position:fixed; inset:0;
+  background:#E5E5EA;
+  display:flex; align-items:center; justify-content:center;
+  padding:20px;
+  z-index:100;
+}
+.auth-box{
+  width:100%; max-width:380px;
+  background:var(--paper);
+  border-radius:28px;
+  padding:32px 26px;
+  text-align:center;
+  box-shadow:0 20px 60px rgba(0,0,0,0.15);
+}
+.auth-logo{ font-size:44px; margin-bottom:8px; }
+.auth-box h1{
+  font-family:'Rubik',sans-serif; font-weight:800; font-size:19px; margin:0 0 6px;
+  color:var(--ink);
+}
+.auth-sub{
+  font-family:'Rubik',sans-serif; font-size:13px; color:var(--text-soft);
+  margin:0 0 20px;
+}
+.auth-input{
+  width:100%; padding:13px 15px; border-radius:16px; border:1px solid var(--line);
+  background:var(--paper-dim); font-size:15px; font-family:'Rubik',sans-serif;
+  color:var(--ink); margin-bottom:10px;
+}
+.auth-input:focus{ outline:2px solid var(--blue); outline-offset:1px; background:#fff; }
+.auth-error{
+  font-family:'Rubik',sans-serif; font-size:12.5px; color:var(--rust); font-weight:600;
+  min-height:16px; margin:2px 0 10px;
+}
+#auth-signup-btn{ margin-top:8px; }
+.auth-hint{
+  font-family:'Rubik',sans-serif; font-size:11px; color:var(--text-soft); margin-top:16px;
+}
+.header-logout{
+  position:absolute; top:calc(16px + env(safe-area-inset-top)); right:20px;
+  width:30px; height:30px; border-radius:50%; border:none;
+  background:rgba(60,60,67,0.08); color:var(--ink);
+  font-size:14px; cursor:pointer;
+}
+
 /* HEADER */
 header{
   background:rgba(255,255,255,0.72);
@@ -821,11 +867,44 @@ nav button.active .ic{ transform:translateY(-1px); }
 </style>
 </head>
 <body>
-<div id="app">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyD3H9ynBkT3v8JB_0UuDMPH0-3PtJ9-pjk",
+    authDomain: "finzen-8b9e0.firebaseapp.com",
+    projectId: "finzen-8b9e0",
+    storageBucket: "finzen-8b9e0.firebasestorage.app",
+    messagingSenderId: "1086510702317",
+    appId: "1:1086510702317:web:ccf72655c7526eefc3b6e4",
+    measurementId: "G-MNM46KZGL1"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+</script>
+
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-box">
+    <div class="auth-logo">💰</div>
+    <h1>Registro de Cuentas Personal</h1>
+    <p class="auth-sub">Inicia sesión para ver tus datos en todos tus dispositivos</p>
+    <input type="email" id="auth-email" class="auth-input" placeholder="Correo electrónico" autocomplete="email">
+    <input type="password" id="auth-password" class="auth-input" placeholder="Contraseña" autocomplete="current-password">
+    <p class="auth-error" id="auth-error"></p>
+    <button class="btn btn-goal" id="auth-login-btn" onclick="authLogin()">Iniciar sesión</button>
+    <button class="btn btn-ghost" id="auth-signup-btn" onclick="authSignup()">Crear cuenta nueva</button>
+    <p class="auth-hint">Tus datos son privados — solo tú puedes verlos con tu cuenta.</p>
+  </div>
+</div>
+
+<div id="app" style="display:none;">
   <header>
     <p class="eyebrow" id="header-eyebrow">Registro de Cuentas Personal</p>
     <h1 id="header-title">Resumen</h1>
     <p class="sub" id="header-sub">Registra tu dinero con toda confianza 🌱</p>
+    <button class="header-logout" id="header-logout-btn" onclick="authLogout()" title="Cerrar sesión">⏻</button>
   </header>
 
   <main>
@@ -1271,7 +1350,7 @@ nav button.active .ic{ transform:translateY(-1px); }
 const STORAGE_KEYS = { income:'cuentas_ingresos', expense:'cuentas_gastos', goals:'cuentas_metas', boxes:'cuentas_ahorros', debts:'cuentas_deudas', fixed:'cuentas_gastos_fijos' };
 
 function load(key){ try{ return JSON.parse(localStorage.getItem(key)) || []; }catch(e){ return []; } }
-function save(key, data){ localStorage.setItem(key, JSON.stringify(data)); }
+function save(key, data){ localStorage.setItem(key, JSON.stringify(data)); syncToCloud(); }
 
 let incomes = load(STORAGE_KEYS.income);
 let expenses = load(STORAGE_KEYS.expense);
@@ -2982,14 +3061,109 @@ function renderAll(){
   populateGoalSavingsSelect();
 }
 
-accrueInterest();
-accrueDebts();
-accruePlanPayments();
-renderAll();
+function startAppAfterAuth(){
+  accrueInterest();
+  accrueDebts();
+  accruePlanPayments();
+  renderAll();
 
-if(completedAtLoad.length){
-  setTimeout(()=>celebrateDebtPaid(completedAtLoad.join('" y "')), 400);
+  if(completedAtLoad.length){
+    setTimeout(()=>celebrateDebtPaid(completedAtLoad.join('" y "')), 400);
+  }
+  handleURLParams();
 }
+
+// ---- FIREBASE: LOGIN, SINCRONIZACIÓN EN LA NUBE ----
+let currentUser = null;
+let syncTimer = null;
+let suppressSync = false;
+
+function showAuthError(msg){
+  document.getElementById('auth-error').textContent = msg;
+}
+function translateAuthError(e){
+  const map = {
+    'auth/email-already-in-use': 'Ese correo ya tiene una cuenta — mejor inicia sesión.',
+    'auth/invalid-email': 'Ese correo no es válido.',
+    'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
+    'auth/user-not-found': 'No existe una cuenta con ese correo.',
+    'auth/wrong-password': 'Contraseña incorrecta.',
+    'auth/invalid-credential': 'Correo o contraseña incorrectos.',
+    'auth/missing-password': 'Escribe una contraseña.'
+  };
+  return map[e.code] || 'Ocurrió un error: '+e.message;
+}
+function authSignup(){
+  const email = document.getElementById('auth-email').value.trim();
+  const pass = document.getElementById('auth-password').value;
+  showAuthError('');
+  if(!email || pass.length<6){ showAuthError('Pon un correo válido y una contraseña de al menos 6 caracteres.'); return; }
+  auth.createUserWithEmailAndPassword(email, pass).catch(e=>showAuthError(translateAuthError(e)));
+}
+function authLogin(){
+  const email = document.getElementById('auth-email').value.trim();
+  const pass = document.getElementById('auth-password').value;
+  showAuthError('');
+  if(!email || !pass){ showAuthError('Completa correo y contraseña.'); return; }
+  auth.signInWithEmailAndPassword(email, pass).catch(e=>showAuthError(translateAuthError(e)));
+}
+function authLogout(){
+  auth.signOut();
+}
+
+async function loadCloudData(){
+  const docRef = db.collection('users').doc(currentUser.uid);
+  const snap = await docRef.get();
+  suppressSync = true;
+  if(snap.exists){
+    const data = snap.data() || {};
+    incomes = data.incomes || [];
+    expenses = data.expenses || [];
+    goals = data.goals || [];
+    boxes = data.boxes || [];
+    debts = data.debts || [];
+    fixedExpenses = data.fixedExpenses || [];
+    save(STORAGE_KEYS.income, incomes);
+    save(STORAGE_KEYS.expense, expenses);
+    save(STORAGE_KEYS.goals, goals);
+    save(STORAGE_KEYS.boxes, boxes);
+    save(STORAGE_KEYS.debts, debts);
+    save(STORAGE_KEYS.fixed, fixedExpenses);
+  }
+  suppressSync = false;
+  if(!snap.exists){
+    await syncToCloudNow();
+  }
+}
+function syncToCloud(){
+  if(!currentUser || suppressSync) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncToCloudNow, 1200);
+}
+async function syncToCloudNow(){
+  if(!currentUser) return;
+  const docRef = db.collection('users').doc(currentUser.uid);
+  try{
+    await docRef.set({
+      incomes, expenses, goals, boxes, debts, fixedExpenses,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(e){ console.error('Error al sincronizar con la nube:', e); }
+}
+
+auth.onAuthStateChanged(async (user)=>{
+  if(user){
+    currentUser = user;
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    await loadCloudData();
+    startAppAfterAuth();
+  } else {
+    currentUser = null;
+    document.getElementById('auth-screen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+  }
+});
 
 // ---- DICTADO POR VOZ (multi-transacción) ----
 const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3107,7 +3281,7 @@ if(SpeechRecognitionAPI){
 }
 
 // ---- ENTRADA DESDE ATAJOS DE IPHONE (vía URL) ----
-(function handleURLParams(){
+function handleURLParams(){
   const params = new URLSearchParams(window.location.search);
   const text = params.get('texto') || params.get('text');
   if(text){
@@ -3124,7 +3298,7 @@ if(SpeechRecognitionAPI){
     const cleanURL = window.location.origin + window.location.pathname;
     window.history.replaceState({}, document.title, cleanURL);
   }
-})();
+}
 </script>
 </body>
 </html>

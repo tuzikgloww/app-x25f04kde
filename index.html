@@ -1285,7 +1285,9 @@ nav button.active .ic{ transform:translateY(-1px); }
             <button type="button" data-model="fixed">Monto fijo</button>
             <button type="button" data-model="both">% + fijo</button>
             <button type="button" data-model="frozen">Congelada</button>
+            <button type="button" data-model="al_corriente">✅ Al corriente</button>
           </div>
+          <p class="fab-note" id="debt-model-note" style="margin-top:6px;">Elige "Al corriente" si pagas tu tarjeta de contado cada mes — solo llevas el uso normal, sin intereses.</p>
         </div>
         <div class="row2">
           <div class="field" id="debt-rate-field">
@@ -1300,6 +1302,16 @@ nav button.active .ic{ transform:translateY(-1px); }
         <div class="field" id="debt-monthly-payment-wrap" style="display:none">
           <label>Mensualidad que debes pagar</label>
           <input type="number" id="debt-monthly-payment" placeholder="980" inputmode="decimal">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>Día de corte (opcional)</label>
+            <input type="number" id="debt-cutoff-day" placeholder="20" min="1" max="31" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label>Día de pago (opcional)</label>
+            <input type="number" id="debt-due-day" placeholder="5" min="1" max="31" inputmode="numeric">
+          </div>
         </div>
         <button class="btn" id="debt-submit-btn" style="background:var(--rust); color:#fff;" onclick="addDebt()">Agregar deuda</button>
         <button class="btn btn-ghost" id="debt-cancel-edit" style="display:none; margin-top:8px;" onclick="cancelDebtEdit()">Cancelar edición</button>
@@ -1492,8 +1504,8 @@ function toggleFixedField(){
 }
 
 function updateDebtModelFieldsVisibility(){
-  document.getElementById('debt-rate-field').style.display = (currentDebtModel==='fixed' || currentDebtModel==='frozen') ? 'none' : 'block';
-  document.getElementById('debt-fixed-wrap').style.display = (currentDebtModel==='percent' || currentDebtModel==='frozen') ? 'none' : 'block';
+  document.getElementById('debt-rate-field').style.display = (currentDebtModel==='fixed' || currentDebtModel==='frozen' || currentDebtModel==='al_corriente') ? 'none' : 'block';
+  document.getElementById('debt-fixed-wrap').style.display = (currentDebtModel==='percent' || currentDebtModel==='frozen' || currentDebtModel==='al_corriente') ? 'none' : 'block';
   document.getElementById('debt-monthly-payment-wrap').style.display = (currentDebtModel==='frozen') ? 'block' : 'none';
 }
 function setDebtModelToggle(model){
@@ -1685,13 +1697,9 @@ function addExpense(){
     chargeAccount(accountId, firstPay, desc||cat, expenseId);
     showToast('Plan a meses creado — se agregó '+fmt(firstPay)+' a tus gastos de este mes');
   } else if(isFixed){
-    const expenseId = Date.now()+1;
-    fixedExpenses.unshift({ id:Date.now(), desc: desc || cat, cat, subcat, amount, dayOfMonth: parseInt(date.split('-')[2]), lastPostedMonth: date.slice(0,7), active:true, accountId });
-    expenses.unshift({ id:expenseId, desc: desc || cat, cat, subcat, amount, date, accountId });
+    fixedExpenses.unshift({ id:Date.now(), desc: desc || cat, cat, subcat, amount, dayOfMonth: parseInt(date.split('-')[2]), lastPostedMonth: null, active:true, accountId });
     save(STORAGE_KEYS.fixed, fixedExpenses);
-    save(STORAGE_KEYS.expense, expenses);
-    chargeAccount(accountId, amount, desc||cat, expenseId);
-    showToast('Gasto fijo agregado — se repetirá cada mes automáticamente');
+    showToast('Gasto fijo agregado — márcalo como pagado cuando llegue la fecha');
   } else {
     const expenseId = Date.now();
     expenses.unshift({ id:expenseId, desc: desc || (subcat || cat), cat, subcat, amount, date, accountId });
@@ -1731,6 +1739,10 @@ function cancelExpenseEdit(){
 function deleteExpense(id){
   const exp = expenses.find(e=>e.id===id);
   if(exp) reverseAccountEffect(exp.accountId, exp.id);
+  if(exp && exp.fixedId){
+    const f = fixedExpenses.find(x=>x.id===exp.fixedId);
+    if(f){ f.lastPostedMonth = null; save(STORAGE_KEYS.fixed, fixedExpenses); }
+  }
   expenses = expenses.filter(e=>e.id!==id);
   save(STORAGE_KEYS.expense, expenses);
   renderAll();
@@ -1861,6 +1873,7 @@ async function markGoalMonthlyPaid(id){
     if(!d){ showToast('La deuda vinculada ya no existe.'); return; }
     const pay = Math.min(g.monthly, d.balance);
     d.balance = Math.max(0, d.balance - pay);
+    d.lastPaymentMonth = curMonth;
     const justCompleted = markCompletedIfNeeded(d);
     save(STORAGE_KEYS.debts, debts);
     expenses.unshift({ id:Date.now(), desc:'Abono meta: '+g.name, cat:'Deuda', amount:pay, date:todayISO() });
@@ -1901,15 +1914,37 @@ function getOverdueGoalReminders(){
     return todayDay >= g.paymentDay;
   });
 }
+function getOverdueCardPayments(){
+  const curMonth = todayISO().slice(0,7);
+  const todayDay = new Date().getDate();
+  return debts.filter(d=>{
+    if(d.isPlan || d.completed || !d.dueDay) return false;
+    if(d.lastPaymentMonth===curMonth) return false;
+    return todayDay >= d.dueDay;
+  });
+}
 function renderReminders(){
-  const overdue = getOverdueGoalReminders();
-  const html = overdue.length ? `<div class="reminder-banner">
-    <div class="rtitle">⚠️ Tienes pagos de metas pendientes este mes</div>
-    ${overdue.map(g=>{
-      const d = debts.find(x=>x.id===g.linkedDebtId);
-      return `<div class="rline">"${escapeHTML(g.name)}" vencía el día ${g.paymentDay} — abona ${fmt(g.monthly)} a "${d ? escapeHTML(d.name) : ''}"</div>`;
-    }).join('')}
-  </div>` : '';
+  const overdueGoals = getOverdueGoalReminders();
+  const overdueCards = getOverdueCardPayments();
+  if(!overdueGoals.length && !overdueCards.length){
+    const a = document.getElementById('debt-reminders');
+    const b = document.getElementById('goal-reminders');
+    if(a) a.innerHTML = '';
+    if(b) b.innerHTML = '';
+    return;
+  }
+  const cardLines = overdueCards.map(d=>{
+    const label = d.model==='al_corriente' ? 'debes '+fmt(d.balance)+' (uso normal)' : 'debes '+fmt(d.balance);
+    return `<div class="rline">"${escapeHTML(d.name)}" vencía el día ${d.dueDay} — ${label}</div>`;
+  }).join('');
+  const goalLines = overdueGoals.map(g=>{
+    const d = debts.find(x=>x.id===g.linkedDebtId);
+    return `<div class="rline">"${escapeHTML(g.name)}" vencía el día ${g.paymentDay} — abona ${fmt(g.monthly)} a "${d ? escapeHTML(d.name) : ''}"</div>`;
+  }).join('');
+  const html = `<div class="reminder-banner">
+    <div class="rtitle">⚠️ Tienes pagos pendientes este mes</div>
+    ${cardLines}${goalLines}
+  </div>`;
   const a = document.getElementById('debt-reminders');
   const b = document.getElementById('goal-reminders');
   if(a) a.innerHTML = html;
@@ -2202,6 +2237,8 @@ function clearDebtForm(){
   document.getElementById('debt-rate').value='';
   document.getElementById('debt-fixed').value='';
   document.getElementById('debt-monthly-payment').value='';
+  document.getElementById('debt-cutoff-day').value='';
+  document.getElementById('debt-due-day').value='';
 }
 
 function addDebt(){
@@ -2212,6 +2249,8 @@ function addDebt(){
   const rate = parseFloat(document.getElementById('debt-rate').value) || 0;
   const fixedAmount = parseFloat(document.getElementById('debt-fixed').value) || 0;
   const monthlyPayment = parseFloat(document.getElementById('debt-monthly-payment').value) || 0;
+  const cutoffDay = parseInt(document.getElementById('debt-cutoff-day').value) || null;
+  const dueDay = parseInt(document.getElementById('debt-due-day').value) || null;
   if(!name){ alert('Ponle un nombre a tu tarjeta o crédito.'); return; }
 
   if(editingDebtId){
@@ -2219,12 +2258,13 @@ function addDebt(){
     if(d){
       d.name = name; d.bank = bank; d.limit = limit; d.balance = balance;
       d.model = currentDebtModel; d.rate = rate; d.fixedAmount = fixedAmount; d.monthlyPayment = monthlyPayment;
+      d.cutoffDay = cutoffDay; d.dueDay = dueDay;
       save(STORAGE_KEYS.debts, debts);
       showToast('"'+name+'" actualizada');
     }
     cancelDebtEdit();
   } else {
-    debts.unshift({ id:Date.now(), name, bank, limit, balance, model:currentDebtModel, rate, fixedAmount, monthlyPayment, lastAccrualMonth:todayISO().slice(0,7), lastPaidMonth:null });
+    debts.unshift({ id:Date.now(), name, bank, limit, balance, model:currentDebtModel, rate, fixedAmount, monthlyPayment, cutoffDay, dueDay, lastAccrualMonth:todayISO().slice(0,7), lastPaidMonth:null, lastPaymentMonth:null });
     showToast('"'+name+'" agregada a tus deudas');
   }
   clearDebtForm();
@@ -2243,6 +2283,8 @@ function editDebt(id){
   document.getElementById('debt-rate').value = d.rate || '';
   document.getElementById('debt-fixed').value = d.fixedAmount || '';
   document.getElementById('debt-monthly-payment').value = d.monthlyPayment || '';
+  document.getElementById('debt-cutoff-day').value = d.cutoffDay || '';
+  document.getElementById('debt-due-day').value = d.dueDay || '';
   document.getElementById('debt-form-title').textContent = 'Editar tarjeta o crédito';
   document.getElementById('debt-submit-btn').textContent = 'Guardar cambios';
   document.getElementById('debt-cancel-edit').style.display = 'block';
@@ -2321,7 +2363,8 @@ async function payDebt(id){
   const val = parseFloat(amount);
   if(!val || val<=0) return;
   d.balance = Math.max(0, d.balance - val);
-  const justCompleted = markCompletedIfNeeded(d);
+  d.lastPaymentMonth = todayISO().slice(0,7);
+  const justCompleted = d.model!=='al_corriente' && markCompletedIfNeeded(d);
   save(STORAGE_KEYS.debts, debts);
   expenses.unshift({ id:Date.now(), desc:'Pago a '+d.name, cat:'Deuda', amount:val, date:todayISO() });
   save(STORAGE_KEYS.expense, expenses);
@@ -2409,6 +2452,7 @@ function renderDebts(){
       const pctRaw = d.limit>0 ? (d.balance/d.limit)*100 : 0;
       const pct = Math.min(100, Math.round(pctRaw));
       const paidThisMonth = d.lastPaidMonth === todayISO().slice(0,7);
+      const datesLine = (d.cutoffDay || d.dueDay) ? `<div class="figures" style="margin-top:2px;">${d.cutoffDay ? 'Corte día '+d.cutoffDay : ''}${d.cutoffDay && d.dueDay ? ' · ' : ''}${d.dueDay ? 'Pago día '+d.dueDay : ''}</div>` : '';
       return `<div class="goal-card">
         <div class="goal-top">
           <div class="ring">${ringSVG(pct, '#3D8BFF')}<div class="pct">${Math.round(pctRaw)}%</div></div>
@@ -2416,6 +2460,7 @@ function renderDebts(){
             <div class="name">${escapeHTML(d.name)}${d.bank ? ' · '+escapeHTML(d.bank) : ''}</div>
             <div class="figures">Debes ${fmt(d.balance)}${d.limit ? ' de '+fmt(d.limit)+' de límite' : ''}</div>
             <div class="figures" style="margin-top:2px;">Intereses congelados · mensualidad ${fmt(d.monthlyPayment||0)}</div>
+            ${datesLine}
           </div>
         </div>
         <div class="bar-bg"><div class="bar-fill" style="width:${pct}%; background:#3D8BFF;"></div></div>
@@ -2430,12 +2475,36 @@ function renderDebts(){
         </div>
       </div>`;
     }
+    if(d.model==='al_corriente'){
+      const pctRaw = d.limit>0 ? (d.balance/d.limit)*100 : 0;
+      const pct = Math.min(100, Math.round(pctRaw));
+      const datesLine = (d.cutoffDay || d.dueDay) ? `<div class="figures" style="margin-top:2px;">${d.cutoffDay ? 'Corte día '+d.cutoffDay : ''}${d.cutoffDay && d.dueDay ? ' · ' : ''}${d.dueDay ? 'Pago día '+d.dueDay : ''}</div>` : '';
+      return `<div class="goal-card">
+        <div class="goal-top">
+          <div class="ring">${ringSVG(pct, '#17B978')}<div class="pct">${Math.round(pctRaw)}%</div></div>
+          <div class="goal-info">
+            <div class="name">${escapeHTML(d.name)}${d.bank ? ' · '+escapeHTML(d.bank) : ''}</div>
+            <div class="figures">Debes ${fmt(d.balance)}${d.limit ? ' de '+fmt(d.limit)+' de límite' : ''}</div>
+            <div class="figures" style="margin-top:2px;">✅ Al corriente · uso normal, sin intereses</div>
+            ${datesLine}
+          </div>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${pct}%; background:var(--forest);"></div></div>
+        <div class="goal-actions four">
+          <button onclick="chargeDebt(${d.id})">＋ Cargo</button>
+          <button onclick="payDebt(${d.id})">－ Pagar</button>
+          <button onclick="editDebt(${d.id})">✎ Editar</button>
+          <button class="del" onclick="deleteDebt(${d.id})">Eliminar</button>
+        </div>
+      </div>`;
+    }
     const pctRaw = d.limit>0 ? (d.balance/d.limit)*100 : 0;
     const pct = Math.min(100, Math.round(pctRaw));
     const overLimit = d.limit>0 && d.balance>d.limit;
     const modelLabel = d.model==='percent' ? `${d.rate}% anual`
       : d.model==='fixed' ? `${fmt(d.fixedAmount)} fijo al mes`
       : `${d.rate}% anual + ${fmt(d.fixedAmount)} al mes`;
+    const datesLine = (d.cutoffDay || d.dueDay) ? `<div class="figures" style="margin-top:2px;">${d.cutoffDay ? 'Corte día '+d.cutoffDay : ''}${d.cutoffDay && d.dueDay ? ' · ' : ''}${d.dueDay ? 'Pago día '+d.dueDay : ''}</div>` : '';
     return `<div class="goal-card">
       <div class="goal-top">
         <div class="ring">${ringSVG(pct, '#FF5C4D')}<div class="pct">${Math.round(pctRaw)}%</div></div>
@@ -2443,6 +2512,7 @@ function renderDebts(){
           <div class="name">${escapeHTML(d.name)}${d.bank ? ' · '+escapeHTML(d.bank) : ''}</div>
           <div class="figures">Debes ${fmt(d.balance)} de ${fmt(d.limit)} de límite</div>
           <div class="figures" style="margin-top:2px;">${modelLabel}</div>
+          ${datesLine}
         </div>
       </div>
       ${overLimit ? '<div class="debt-warning">⚠️ Ya superaste tu crédito máximo</div>' : ''}
@@ -3071,6 +3141,44 @@ function startAppAfterAuth(){
     setTimeout(()=>celebrateDebtPaid(completedAtLoad.join('" y "')), 400);
   }
   handleURLParams();
+  checkNativeReminders();
+}
+
+// ---- SERVICE WORKER + NOTIFICACIÓN NATIVA DE PENDIENTES ----
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(e=>console.error('No se pudo registrar el service worker:', e));
+}
+
+function checkNativeReminders(){
+  if(!('Notification' in window) || !('serviceWorker' in navigator)) return;
+  const overdueGoals = getOverdueGoalReminders();
+  const overdueCards = getOverdueCardPayments();
+  const overdueFixed = getOverdueFixedExpenses();
+  const total = overdueGoals.length + overdueCards.length + overdueFixed.length;
+  if(total===0) return;
+
+  const todayStr = todayISO();
+  if(localStorage.getItem('cuentas_last_notify_date') === todayStr) return;
+
+  const parts = [];
+  if(overdueCards.length) parts.push(overdueCards.length+' tarjeta'+(overdueCards.length>1?'s':'')+' por pagar');
+  if(overdueGoals.length) parts.push(overdueGoals.length+' meta'+(overdueGoals.length>1?'s':'')+' pendiente'+(overdueGoals.length>1?'s':''));
+  if(overdueFixed.length) parts.push(overdueFixed.length+' gasto'+(overdueFixed.length>1?'s':'')+' fijo'+(overdueFixed.length>1?'s':''));
+  const body = parts.join(' · ')+'. Abre la app para revisarlos.';
+
+  const fire = async ()=>{
+    try{
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification('⚠️ Tienes pagos pendientes', { body, tag:'cuentas-reminder' });
+      localStorage.setItem('cuentas_last_notify_date', todayStr);
+    }catch(e){ console.error('No se pudo mostrar la notificación:', e); }
+  };
+
+  if(Notification.permission === 'granted'){
+    fire();
+  } else if(Notification.permission !== 'denied'){
+    Notification.requestPermission().then(perm=>{ if(perm==='granted') fire(); });
+  }
 }
 
 // ---- FIREBASE: LOGIN, SINCRONIZACIÓN EN LA NUBE ----

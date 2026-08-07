@@ -767,6 +767,28 @@ nav button.active .ic{ transform:translateY(-1px); }
 }
 
 /* SAVINGS BOX */
+.subaccounts-toggle{
+  width:100%; background:none; border:none; padding:10px 0 2px;
+  font-family:'Rubik',sans-serif; font-size:12.5px; font-weight:700; color:var(--blue);
+  text-align:left; cursor:pointer;
+}
+.subaccounts-block{
+  background:var(--paper-dim); border-radius:14px; padding:10px 12px; margin-top:6px;
+}
+.subaccount-row{
+  display:flex; align-items:center; gap:8px; padding:7px 0;
+  border-bottom:1px solid rgba(60,60,67,0.08);
+}
+.subaccount-row:last-of-type{ border-bottom:none; }
+.subaccount-row.unassigned{ opacity:0.65; font-style:italic; }
+.sa-name{ flex:1; min-width:0; font-family:'Rubik',sans-serif; font-size:12.5px; font-weight:600; color:var(--ink); }
+.sa-balance{ font-family:'Rubik',sans-serif; font-size:12.5px; font-weight:700; color:var(--ink); white-space:nowrap; }
+.sa-btn{
+  width:22px; height:22px; border-radius:50%; border:none; background:#fff;
+  font-size:11px; cursor:pointer; flex-shrink:0; color:var(--ink);
+}
+.sa-btn.del{ color:var(--rust); }
+
 .rate-badge{
   width:64px; height:64px; border-radius:50%; flex-shrink:0;
   background:var(--gold-soft);
@@ -2769,6 +2791,102 @@ function renderAccountsBreakdown(){
   ).join('');
 }
 
+let expandedAccountIds = new Set();
+
+function toggleAccountExpand(id){
+  if(expandedAccountIds.has(id)) expandedAccountIds.delete(id);
+  else expandedAccountIds.add(id);
+  renderBoxes();
+}
+
+function getUnassigned(b){
+  const assigned = (b.subaccounts||[]).reduce((s,sa)=>s+sa.balance,0);
+  return Math.max(0, b.balance - assigned);
+}
+
+async function addSubaccount(accountId){
+  const b = boxes.find(x=>x.id===accountId);
+  if(!b) return;
+  if(!b.subaccounts) b.subaccounts = [];
+  const unassigned = getUnassigned(b);
+  const name = await openModal({ title:'Nueva subdivisión', message:'Nombre de la subdivisión (ej. "Quincena", "Casa")', inputType:'text', inputValue:'', confirmText:'Siguiente' });
+  if(name===null || !name.trim()) return;
+  const amountStr = await openModal({ title:'Monto a asignar', message:'Sin asignar disponible: '+fmt(unassigned)+'. ¿Cuánto quieres poner en "'+name.trim()+'"? (puedes dejarlo en 0 y agregarle después)', inputValue:0, confirmText:'Crear' });
+  if(amountStr===null) return;
+  let amount = parseFloat(amountStr) || 0;
+  if(amount<0) amount = 0;
+  if(amount>unassigned) amount = unassigned;
+  b.subaccounts.push({ id:Date.now()+Math.random(), name:name.trim(), balance:amount });
+  expandedAccountIds.add(accountId);
+  save(STORAGE_KEYS.boxes, boxes);
+  renderAll();
+  showToast('Subdivisión "'+name.trim()+'" creada');
+}
+
+async function moveToSubaccount(accountId, subId){
+  const b = boxes.find(x=>x.id===accountId);
+  if(!b) return;
+  const sa = (b.subaccounts||[]).find(x=>x.id===subId);
+  if(!sa) return;
+  const unassigned = getUnassigned(b);
+  const amountStr = await openModal({ title:'Agregar a "'+sa.name+'"', message:'Sin asignar disponible: '+fmt(unassigned), confirmText:'Agregar' });
+  if(amountStr===null) return;
+  let val = parseFloat(amountStr);
+  if(!val || val<=0) return;
+  if(val>unassigned) val = unassigned;
+  sa.balance += val;
+  save(STORAGE_KEYS.boxes, boxes);
+  renderAll();
+  showToast('Agregado a "'+sa.name+'"');
+}
+
+async function moveFromSubaccount(accountId, subId){
+  const b = boxes.find(x=>x.id===accountId);
+  if(!b) return;
+  const sa = (b.subaccounts||[]).find(x=>x.id===subId);
+  if(!sa) return;
+  const amountStr = await openModal({ title:'Quitar de "'+sa.name+'"', message:'Saldo actual de esta subdivisión: '+fmt(sa.balance), confirmText:'Quitar' });
+  if(amountStr===null) return;
+  let val = parseFloat(amountStr);
+  if(!val || val<=0) return;
+  if(val>sa.balance) val = sa.balance;
+  sa.balance -= val;
+  save(STORAGE_KEYS.boxes, boxes);
+  renderAll();
+  showToast('Se regresó '+fmt(val)+' a "Sin asignar"');
+}
+
+function deleteSubaccount(accountId, subId){
+  const b = boxes.find(x=>x.id===accountId);
+  if(!b) return;
+  b.subaccounts = (b.subaccounts||[]).filter(x=>x.id!==subId);
+  save(STORAGE_KEYS.boxes, boxes);
+  renderAll();
+  showToast('Subdivisión eliminada — su saldo volvió a "Sin asignar"');
+}
+
+function renderSubaccountsBlock(b){
+  const unassigned = getUnassigned(b);
+  const subs = b.subaccounts || [];
+  const rows = subs.map(sa => `
+    <div class="subaccount-row">
+      <div class="sa-name">${escapeHTML(sa.name)}</div>
+      <div class="sa-balance">${fmt(sa.balance)}</div>
+      <button class="sa-btn" onclick="moveToSubaccount(${b.id}, ${sa.id})" aria-label="Agregar">＋</button>
+      <button class="sa-btn" onclick="moveFromSubaccount(${b.id}, ${sa.id})" aria-label="Quitar">－</button>
+      <button class="sa-btn del" onclick="deleteSubaccount(${b.id}, ${sa.id})" aria-label="Eliminar">✕</button>
+    </div>
+  `).join('');
+  return `<div class="subaccounts-block">
+    ${rows || '<div class="empty" style="padding:8px 0;">Aún no has creado subdivisiones.</div>'}
+    <div class="subaccount-row unassigned">
+      <div class="sa-name">Sin asignar</div>
+      <div class="sa-balance">${fmt(unassigned)}</div>
+    </div>
+    <button class="btn btn-ghost" style="margin-top:10px;" onclick="addSubaccount(${b.id})">＋ Nueva subdivisión</button>
+  </div>`;
+}
+
 function renderBoxes(){
   const el = document.getElementById('boxes-list');
   if(!boxes.length){ el.innerHTML = '<div class="empty">Aún no tienes cuentas. Crea una arriba.</div>'; return; }
@@ -2790,6 +2908,10 @@ function renderBoxes(){
           <div class="figures">${figures}</div>
         </div>
       </div>
+      <button class="subaccounts-toggle" onclick="toggleAccountExpand(${b.id})">
+        ${expandedAccountIds.has(b.id) ? '▲' : '▼'} Subcuentas${b.subaccounts && b.subaccounts.length ? ' ('+b.subaccounts.length+')' : ''}
+      </button>
+      ${expandedAccountIds.has(b.id) ? renderSubaccountsBlock(b) : ''}
       <div class="goal-actions four">
         <button onclick="depositBox(${b.id})">＋ Depositar</button>
         <button onclick="withdrawBox(${b.id})">－ Retirar</button>

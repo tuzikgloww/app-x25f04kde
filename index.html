@@ -1363,6 +1363,7 @@ nav button.active .ic{ transform:translateY(-1px); }
       <div class="modal-title" id="modal-title">Título</div>
       <div class="modal-message" id="modal-message">Mensaje</div>
       <input type="number" id="modal-input" class="modal-input" inputmode="decimal" placeholder="0.00">
+      <select id="modal-select" class="modal-input" style="display:none;"></select>
       <div class="modal-actions">
         <button class="modal-btn cancel" id="modal-cancel">Cancelar</button>
         <button class="modal-btn confirm" id="modal-confirm">Confirmar</button>
@@ -1397,19 +1398,28 @@ let currentDebtModel = 'percent';
 
 // ---- MODAL (reemplaza prompt/confirm, que no funcionan bien en apps guardadas en pantalla de inicio) ----
 let modalResolve = null;
-function openModal({title, message, inputValue, confirmText, showInput=true, showCancel=true, inputType='number'}){
+function openModal({title, message, inputValue, confirmText, showInput=true, showCancel=true, inputType='number', selectOptions=null}){
   return new Promise(resolve=>{
     modalResolve = resolve;
     document.getElementById('modal-title').textContent = title || '';
     document.getElementById('modal-message').textContent = message || '';
     const inp = document.getElementById('modal-input');
-    inp.type = inputType;
-    inp.style.display = showInput ? 'block' : 'none';
-    inp.value = (inputValue!==undefined && inputValue!==null) ? inputValue : '';
+    const sel = document.getElementById('modal-select');
+    if(inputType==='select' && selectOptions){
+      inp.style.display = 'none';
+      sel.style.display = showInput ? 'block' : 'none';
+      sel.innerHTML = selectOptions.map(o=>`<option value="${o.value}">${escapeHTML(o.label)}</option>`).join('');
+      if(inputValue!==undefined && inputValue!==null) sel.value = inputValue;
+    } else {
+      sel.style.display = 'none';
+      inp.type = inputType;
+      inp.style.display = showInput ? 'block' : 'none';
+      inp.value = (inputValue!==undefined && inputValue!==null) ? inputValue : '';
+    }
     document.getElementById('modal-cancel').style.display = showCancel ? 'block' : 'none';
     document.getElementById('modal-confirm').textContent = confirmText || 'Confirmar';
     document.getElementById('modal-overlay').classList.add('show');
-    if(showInput) setTimeout(()=>inp.focus(), 80);
+    if(showInput && inputType!=='select') setTimeout(()=>inp.focus(), 80);
   });
 }
 function closeModal(result){
@@ -1421,10 +1431,28 @@ function closeModal(result){
 document.getElementById('modal-cancel').addEventListener('click', ()=>closeModal(null));
 document.getElementById('modal-confirm').addEventListener('click', ()=>{
   const inp = document.getElementById('modal-input');
-  closeModal(inp.style.display==='none' ? true : inp.value);
+  const sel = document.getElementById('modal-select');
+  if(sel.style.display!=='none'){ closeModal(sel.value); }
+  else{ closeModal(inp.style.display==='none' ? true : inp.value); }
 });
 document.getElementById('modal-overlay').addEventListener('click', (e)=>{ if(e.target.id==='modal-overlay') closeModal(null); });
 document.getElementById('modal-input').addEventListener('keydown', (e)=>{ if(e.key==='Enter') closeModal(document.getElementById('modal-input').value); });
+
+async function pickAccountForPayment(promptTitle, excludeId){
+  const options_boxes = excludeId ? boxes.filter(b=>b.id!==excludeId) : boxes;
+  if(!options_boxes.length) return '';
+  const options = [{ value:'', label:'No descontar de ninguna cuenta' }].concat(
+    options_boxes.map(b=>({ value:String(b.id), label:(ACCOUNT_ICONS[b.category]||'💰')+' '+b.name+' ('+fmt(b.balance)+')' }))
+  );
+  const result = await openModal({
+    title: promptTitle || '¿De qué cuenta sale el dinero?',
+    message: 'Elige la cuenta de la que se va a descontar.',
+    inputType:'select',
+    selectOptions: options,
+    confirmText:'Confirmar'
+  });
+  return result;
+}
 
 // ---- TOAST ----
 let toastTimer = null;
@@ -1867,14 +1895,17 @@ async function payGoalSavingsExtra(id){
   if(!g) return;
   const b = boxes.find(x=>x.id===g.linkedAccountId);
   if(!b){ showToast('La cuenta vinculada ya no existe.'); return; }
-  const amount = await openModal({ title:'Aportar a "'+g.name+'"', message:'¿Cuánto quieres aportar extra a esta meta?', confirmText:'Aportar' });
+  const amount = await openModal({ title:'Aportar a "'+g.name+'"', message:'¿Cuánto quieres aportar extra a esta meta?', confirmText:'Siguiente' });
   if(amount===null) return;
   const val = parseFloat(amount);
   if(!val || val<=0) return;
+  const sourceId = await pickAccountForPayment('¿De qué cuenta sale este aporte?', b.id);
+  if(sourceId===null) return;
   b.balance += val;
   if(!b.history) b.history = [];
   b.history.push({ id:Date.now()+Math.random(), date:todayISO(), type:'deposito', amount:val, balanceAfter:b.balance, desc:'Aporte a meta: '+g.name });
   save(STORAGE_KEYS.boxes, boxes);
+  if(sourceId) chargeAccount(sourceId, val, 'Aporte a meta: '+g.name);
   const justCompleted = (g.paid < g.total) && (g.paid+val >= g.total);
   g.paid = Math.min(g.total, g.paid + val);
   save(STORAGE_KEYS.goals, goals);
@@ -1894,12 +1925,16 @@ async function markGoalMonthlyPaid(id){
     const d = debts.find(x=>x.id===g.linkedDebtId);
     if(!d){ showToast('La deuda vinculada ya no existe.'); return; }
     const pay = Math.min(g.monthly, d.balance);
+    const accountId = await pickAccountForPayment('¿De qué cuenta abonas a "'+g.name+'"?');
+    if(accountId===null) return;
     d.balance = Math.max(0, d.balance - pay);
     d.lastPaymentMonth = curMonth;
     const justCompleted = markCompletedIfNeeded(d);
     save(STORAGE_KEYS.debts, debts);
-    expenses.unshift({ id:Date.now(), desc:'Abono meta: '+g.name, cat:'Deuda', amount:pay, date:todayISO() });
+    const expId = Date.now();
+    expenses.unshift({ id:expId, desc:'Abono meta: '+g.name, cat:'Deuda', amount:pay, date:todayISO(), accountId: accountId || null });
     save(STORAGE_KEYS.expense, expenses);
+    if(accountId) chargeAccount(accountId, pay, 'Abono meta: '+g.name, expId);
     g.lastPaidMonth = curMonth;
     save(STORAGE_KEYS.goals, goals);
     renderAll();
@@ -1911,10 +1946,14 @@ async function markGoalMonthlyPaid(id){
     const remaining = Math.max(0, g.total - g.paid);
     if(remaining<=0){ showToast('Ya completaste esta meta.'); return; }
     const pay = Math.min(g.monthly, remaining);
+    const sourceId = await pickAccountForPayment('¿De qué cuenta sale el aporte para "'+g.name+'"?', b.id);
+    if(sourceId===null) return;
     b.balance += pay;
     if(!b.history) b.history = [];
-    b.history.push({ id:Date.now()+Math.random(), date:todayISO(), type:'deposito', amount:pay, balanceAfter:b.balance, desc:'Aporte a meta: '+g.name });
+    const depId = Date.now()+Math.random();
+    b.history.push({ id:depId, date:todayISO(), type:'deposito', amount:pay, balanceAfter:b.balance, desc:'Aporte a meta: '+g.name });
     save(STORAGE_KEYS.boxes, boxes);
+    if(sourceId) chargeAccount(sourceId, pay, 'Aporte a meta: '+g.name);
     g.paid = Math.min(g.total, g.paid + pay);
     g.lastPaidMonth = curMonth;
     const justCompleted = g.paid >= g.total;
@@ -2355,12 +2394,17 @@ async function markMonthlyPaid(id){
   }
   const pay = Math.min(d.monthlyPayment || 0, d.balance);
   if(pay<=0){ showToast('Ponle un monto de mensualidad a esta deuda primero (edítala).'); return; }
+  const accountId = await pickAccountForPayment('¿De qué cuenta pagas la mensualidad de "'+d.name+'"?');
+  if(accountId===null) return;
   d.balance = Math.max(0, d.balance - pay);
   d.lastPaidMonth = curMonth;
+  d.lastPaymentMonth = curMonth;
   const justCompleted = markCompletedIfNeeded(d);
   save(STORAGE_KEYS.debts, debts);
-  expenses.unshift({ id:Date.now(), desc:'Mensualidad de '+d.name, cat:'Deuda', amount:pay, date:todayISO() });
+  const expId = Date.now();
+  expenses.unshift({ id:expId, desc:'Mensualidad de '+d.name, cat:'Deuda', amount:pay, date:todayISO(), accountId: accountId || null });
   save(STORAGE_KEYS.expense, expenses);
+  if(accountId) chargeAccount(accountId, pay, 'Mensualidad de '+d.name, expId);
   renderAll();
   if(justCompleted){ celebrateDebtPaid(d.name); }
   else{ showToast('Mensualidad de '+fmt(pay)+' marcada como pagada'); }
@@ -2380,16 +2424,20 @@ async function chargeDebt(id){
 
 async function payDebt(id){
   const d = debts.find(d=>d.id===id);
-  const amount = await openModal({ title:'Pagar "'+d.name+'"', message:'Saldo actual: '+fmt(d.balance)+'. ¿Cuánto vas a abonar?', confirmText:'Pagar' });
+  const amount = await openModal({ title:'Pagar "'+d.name+'"', message:'Saldo actual: '+fmt(d.balance)+'. ¿Cuánto vas a abonar?', confirmText:'Siguiente' });
   if(amount===null) return;
   const val = parseFloat(amount);
   if(!val || val<=0) return;
+  const accountId = await pickAccountForPayment();
+  if(accountId===null) return;
   d.balance = Math.max(0, d.balance - val);
   d.lastPaymentMonth = todayISO().slice(0,7);
   const justCompleted = d.model!=='al_corriente' && markCompletedIfNeeded(d);
   save(STORAGE_KEYS.debts, debts);
-  expenses.unshift({ id:Date.now(), desc:'Pago a '+d.name, cat:'Deuda', amount:val, date:todayISO() });
+  const expId = Date.now();
+  expenses.unshift({ id:expId, desc:'Pago a '+d.name, cat:'Deuda', amount:val, date:todayISO(), accountId: accountId || null });
   save(STORAGE_KEYS.expense, expenses);
+  if(accountId) chargeAccount(accountId, val, 'Pago a '+d.name, expId);
   renderAll();
   if(justCompleted){
     celebrateDebtPaid(d.name);

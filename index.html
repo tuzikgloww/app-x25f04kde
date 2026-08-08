@@ -71,6 +71,11 @@ body{
   box-shadow:0 20px 60px rgba(0,0,0,0.15);
 }
 .auth-logo{ font-size:44px; margin-bottom:8px; }
+.loading-spin{ animation:loadingPulse 1.1s ease-in-out infinite; }
+@keyframes loadingPulse{
+  0%, 100%{ opacity:0.5; transform:scale(0.92); }
+  50%{ opacity:1; transform:scale(1.08); }
+}
 .auth-box h1{
   font-family:'Rubik',sans-serif; font-weight:800; font-size:19px; margin:0 0 6px;
   color:var(--ink);
@@ -415,6 +420,19 @@ main{
   margin-top:10px;
   text-align:center;
 }
+.debts-total-card{
+  background:linear-gradient(155deg, #FF6B5C 0%, #FF453A 55%, #D93A30 100%);
+  border-radius:var(--radius);
+  padding:18px 20px;
+  margin-bottom:14px;
+  color:#fff;
+}
+.dt-label{
+  font-family:'Rubik',sans-serif; font-size:11px; font-weight:700;
+  text-transform:uppercase; letter-spacing:0.08em; opacity:0.85;
+}
+.dt-amount{ font-family:'Rubik',sans-serif; font-size:30px; font-weight:800; margin-top:4px; }
+.dt-sub{ font-family:'Rubik',sans-serif; font-size:12px; opacity:0.85; margin-top:4px; }
 .reminder-banner{
   background:var(--rust);
   color:#fff;
@@ -489,6 +507,10 @@ main{
   margin-bottom:14px;
   position:relative;
   overflow:hidden;
+  transition:background 0.3s ease;
+}
+.today-card.negative{
+  background:linear-gradient(155deg, #FF6B5C 0%, #FF453A 55%, #D93A30 100%);
 }
 .today-card::after{
   content:"";
@@ -907,7 +929,11 @@ nav button.active .ic{ transform:translateY(-1px); }
   const db = firebase.firestore();
 </script>
 
-<div id="auth-screen" class="auth-screen">
+<div id="loading-screen" class="auth-screen">
+  <div class="auth-logo loading-spin">💰</div>
+</div>
+
+<div id="auth-screen" class="auth-screen" style="display:none;">
   <div class="auth-box">
     <div class="auth-logo">💰</div>
     <h1>Registro de Cuentas Personal</h1>
@@ -1255,6 +1281,7 @@ nav button.active .ic{ transform:translateY(-1px); }
     <!-- DEUDAS -->
     <section class="view" id="view-deudas">
       <div id="debt-reminders"></div>
+      <div id="debts-total-summary"></div>
       <div class="card">
         <h2 id="debt-form-title">Nueva tarjeta o crédito</h2>
         <div class="field">
@@ -1764,7 +1791,7 @@ function addExpense(){
 function editExpense(id){
   const exp = expenses.find(e=>e.id===id);
   if(!exp) return;
-  if(exp.planId || exp.fixedId){ showToast('Este gasto viene de un plan a meses o gasto fijo — edítalo desde ahí, aquí solo puedes eliminarlo.'); return; }
+  if(exp.planId || exp.fixedId || exp.debtId){ showToast('Este gasto viene de un plan, gasto fijo o pago de deuda — edítalo desde ahí, aquí solo puedes eliminarlo.'); return; }
   editingExpenseId = id;
   document.getElementById('expense-desc').value = exp.desc;
   document.getElementById('expense-cat').value = exp.cat;
@@ -1793,9 +1820,28 @@ function deleteExpense(id){
     const f = fixedExpenses.find(x=>x.id===exp.fixedId);
     if(f){ f.lastPostedMonth = null; save(STORAGE_KEYS.fixed, fixedExpenses); }
   }
+  if(exp && exp.debtId){
+    const d = debts.find(x=>x.id===exp.debtId);
+    if(d){
+      if(exp.debtEffect==='charge'){
+        d.balance = Math.max(0, d.balance - exp.amount);
+      } else {
+        d.balance += exp.amount;
+      }
+      if(d.completed && d.balance>0){ d.completed = false; d.completedDate = null; }
+      d.lastPaidMonth = null;
+      d.lastPaymentMonth = null;
+      save(STORAGE_KEYS.debts, debts);
+    }
+  }
+  if(exp && exp.goalId){
+    const g = goals.find(x=>x.id===exp.goalId);
+    if(g){ g.lastPaidMonth = null; save(STORAGE_KEYS.goals, goals); }
+  }
   expenses = expenses.filter(e=>e.id!==id);
   save(STORAGE_KEYS.expense, expenses);
   renderAll();
+  showToast('Gasto eliminado — se revirtió su efecto en cuentas y deudas');
 }
 
 // ---- GOALS ----
@@ -1932,7 +1978,7 @@ async function markGoalMonthlyPaid(id){
     const justCompleted = markCompletedIfNeeded(d);
     save(STORAGE_KEYS.debts, debts);
     const expId = Date.now();
-    expenses.unshift({ id:expId, desc:'Abono meta: '+g.name, cat:'Deuda', amount:pay, date:todayISO(), accountId: accountId || null });
+    expenses.unshift({ id:expId, desc:'Abono meta: '+g.name, cat:'Deuda', amount:pay, date:todayISO(), accountId: accountId || null, debtId:d.id, debtEffect:'payment', goalId:g.id });
     save(STORAGE_KEYS.expense, expenses);
     if(accountId) chargeAccount(accountId, pay, 'Abono meta: '+g.name, expId);
     g.lastPaidMonth = curMonth;
@@ -2012,8 +2058,12 @@ function renderReminders(){
   if(b) b.innerHTML = html;
 }
 
-function deleteGoal(id){
-  goals = goals.filter(g=>g.id!==id);
+async function deleteGoal(id){
+  const g = goals.find(x=>x.id===id);
+  if(!g) return;
+  const confirmed = await openModal({ title:'¿Eliminar "'+g.name+'"?', message:'Se borrará esta meta. Esto no afecta la deuda o cuenta vinculada, solo la meta en sí. No se puede deshacer.', showInput:false, confirmText:'Eliminar' });
+  if(!confirmed) return;
+  goals = goals.filter(x=>x.id!==id);
   save(STORAGE_KEYS.goals, goals);
   renderAll();
 }
@@ -2402,7 +2452,7 @@ async function markMonthlyPaid(id){
   const justCompleted = markCompletedIfNeeded(d);
   save(STORAGE_KEYS.debts, debts);
   const expId = Date.now();
-  expenses.unshift({ id:expId, desc:'Mensualidad de '+d.name, cat:'Deuda', amount:pay, date:todayISO(), accountId: accountId || null });
+  expenses.unshift({ id:expId, desc:'Mensualidad de '+d.name, cat:'Deuda', amount:pay, date:todayISO(), accountId: accountId || null, debtId:d.id, debtEffect:'payment' });
   save(STORAGE_KEYS.expense, expenses);
   if(accountId) chargeAccount(accountId, pay, 'Mensualidad de '+d.name, expId);
   renderAll();
@@ -2412,14 +2462,31 @@ async function markMonthlyPaid(id){
 
 async function chargeDebt(id){
   const d = debts.find(d=>d.id===id);
-  const amount = await openModal({ title:'Agregar cargo a "'+d.name+'"', message:'¿Cuánto vas a cargar a esta tarjeta o crédito?', confirmText:'Agregar' });
+  const amount = await openModal({ title:'Agregar cargo a "'+d.name+'"', message:'¿Cuánto vas a cargar a esta tarjeta o crédito?', confirmText:'Siguiente' });
   if(amount===null) return;
   const val = parseFloat(amount);
   if(!val || val<=0) return;
+
+  const catOptions = Object.keys(CAT_COLORS).map(c=>({ value:c, label:(CAT_ICON[c]||'')+' '+c }));
+  const cat = await openModal({
+    title:'¿En qué categoría?',
+    message:'Para que este cargo se vea reflejado en tus gastos por categoría.',
+    inputType:'select',
+    selectOptions: catOptions,
+    inputValue:'Otro',
+    confirmText:'Siguiente'
+  });
+  if(cat===null) return;
+
+  const desc = await openModal({ title:'¿Qué compraste?', message:'Descripción (opcional)', inputType:'text', inputValue:'', confirmText:'Agregar cargo' });
+  if(desc===null) return;
+
   d.balance += val;
   save(STORAGE_KEYS.debts, debts);
+  expenses.unshift({ id:Date.now(), desc: desc.trim() || cat, cat, subcat:null, amount:val, date:todayISO(), isCreditCharge:true, debtId:d.id, debtEffect:'charge' });
+  save(STORAGE_KEYS.expense, expenses);
   renderAll();
-  showToast('Cargo de '+fmt(val)+' agregado a "'+d.name+'"');
+  showToast('Cargo de '+fmt(val)+' agregado a "'+d.name+'" · categoría '+cat);
 }
 
 async function payDebt(id){
@@ -2435,7 +2502,7 @@ async function payDebt(id){
   const justCompleted = d.model!=='al_corriente' && markCompletedIfNeeded(d);
   save(STORAGE_KEYS.debts, debts);
   const expId = Date.now();
-  expenses.unshift({ id:expId, desc:'Pago a '+d.name, cat:'Deuda', amount:val, date:todayISO(), accountId: accountId || null });
+  expenses.unshift({ id:expId, desc:'Pago a '+d.name, cat:'Deuda', amount:val, date:todayISO(), accountId: accountId || null, debtId:d.id, debtEffect:'payment' });
   save(STORAGE_KEYS.expense, expenses);
   if(accountId) chargeAccount(accountId, val, 'Pago a '+d.name, expId);
   renderAll();
@@ -2446,8 +2513,14 @@ async function payDebt(id){
   }
 }
 
-function deleteDebt(id){
-  debts = debts.filter(d=>d.id!==id);
+async function deleteDebt(id){
+  const d = debts.find(x=>x.id===id);
+  if(!d) return;
+  const linkedGoals = goals.filter(g=>g.type==='debt' && g.linkedDebtId===id);
+  const warning = linkedGoals.length ? ' Tienes '+linkedGoals.length+' meta(s) vinculada(s) a esta deuda que se quedarán sin conexión.' : '';
+  const confirmed = await openModal({ title:'¿Eliminar "'+d.name+'"?', message:'Se borrará esta deuda y su historial de esta lista.'+warning+' No se puede deshacer.', showInput:false, confirmText:'Eliminar' });
+  if(!confirmed) return;
+  debts = debts.filter(x=>x.id!==id);
   save(STORAGE_KEYS.debts, debts);
   renderAll();
 }
@@ -2476,6 +2549,19 @@ async function simulateDebt(id){
     showCancel:false,
     confirmText:'Entendido'
   });
+}
+
+function renderDebtsTotal(){
+  const el = document.getElementById('debts-total-summary');
+  if(!el) return;
+  const active = debts.filter(d=>!d.completed);
+  if(!active.length){ el.innerHTML = ''; return; }
+  const total = active.reduce((s,d)=>s+d.balance,0);
+  el.innerHTML = `<div class="debts-total-card">
+    <div class="dt-label">Debes en total</div>
+    <div class="dt-amount">${fmt(total)}</div>
+    <div class="dt-sub">${active.length} deuda${active.length>1?'s':''} activa${active.length>1?'s':''}</div>
+  </div>`;
 }
 
 function renderDebts(){
@@ -2714,8 +2800,14 @@ function reverseAccountEffect(accountId, refId){
   save(STORAGE_KEYS.boxes, boxes);
 }
 
-function deleteBox(id){
-  boxes = boxes.filter(b=>b.id!==id);
+async function deleteBox(id){
+  const b = boxes.find(x=>x.id===id);
+  if(!b) return;
+  const linkedGoals = goals.filter(g=>g.type==='savings' && g.linkedAccountId===id);
+  const warning = linkedGoals.length ? ' Tienes '+linkedGoals.length+' meta(s) vinculada(s) a esta cuenta que se quedarán sin conexión.' : '';
+  const confirmed = await openModal({ title:'¿Eliminar "'+b.name+'"?', message:'Se borrará esta cuenta, su historial y sus subdivisiones.'+warning+' No se puede deshacer.', showInput:false, confirmText:'Eliminar' });
+  if(!confirmed) return;
+  boxes = boxes.filter(x=>x.id!==id);
   save(STORAGE_KEYS.boxes, boxes);
   renderAll();
 }
@@ -3092,7 +3184,7 @@ function renderLedger(targetId, items, kind, query){
   }
   el.innerHTML = items.map(it=>{
     const delFn = kind==='income' ? `deleteIncome(${it.id})` : `deleteExpense(${it.id})`;
-    const canEdit = kind==='income' ? true : !(it.planId || it.fixedId);
+    const canEdit = kind==='income' ? true : !(it.planId || it.fixedId || it.debtId);
     const editFn = canEdit ? (kind==='income' ? `editIncome(${it.id})` : `editExpense(${it.id})`) : null;
     return chipRowHTML(it, kind, { delFn, editFn });
   }).join('');
@@ -3241,12 +3333,14 @@ function renderCategoryCharts(){
 function renderTodayAvailable(){
   const todayStr = todayISO();
   const totalIncome = incomes.filter(i=>i.date<=todayStr).reduce((s,i)=>s+i.amount,0);
-  const totalExpense = expenses.filter(e=>e.date<=todayStr).reduce((s,e)=>s+e.amount,0);
+  const totalExpense = expenses.filter(e=>e.date<=todayStr && !e.isCreditCharge).reduce((s,e)=>s+e.amount,0);
   const available = totalIncome - totalExpense;
   document.getElementById('today-amount').textContent = fmt(available);
   const dateObj = new Date(todayStr+'T00:00:00');
   const opts = { weekday:'long', day:'numeric', month:'long' };
   document.getElementById('today-date').textContent = dateObj.toLocaleDateString('es-MX', opts);
+  const todayCardEl = document.querySelector('.today-card');
+  if(todayCardEl) todayCardEl.classList.toggle('negative', available<0);
   renderAccountsBreakdown();
 }
 
@@ -3296,6 +3390,7 @@ function renderAll(){
   populateExpenseAccountOptions();
   renderCalendar();
   renderDebts();
+  renderDebtsTotal();
   renderReminders();
   populateGoalDebtSelect();
   populateGoalSavingsSelect();
@@ -3430,6 +3525,7 @@ async function syncToCloudNow(){
 }
 
 auth.onAuthStateChanged(async (user)=>{
+  document.getElementById('loading-screen').style.display = 'none';
   if(user){
     currentUser = user;
     document.getElementById('auth-screen').style.display = 'none';
